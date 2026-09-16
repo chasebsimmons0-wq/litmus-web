@@ -10,6 +10,11 @@ account. It is a stopgap, not a second product.
 - Onboarding: where it hurts, what it feels like, history, contributing factors, and a safety check
 - A baseline, with several readings a day averaged and flare days marked
 - Randomised 10 × 7-day trials, with the adherence question on "on" days
+- Several trials at once: the engine adjusts for the overlap, trials are lengthened
+  to compensate, and the loss of precision is shown before a trial starts
+- Symptom tracking alongside pain, and medication tracking (a before-and-after
+  comparison, never an on/off trial)
+- Backups through the share sheet to Files or iCloud Drive, with a reminder
 - The result, the likely range, the next step, and a one-page clinician summary
 - Three guided practices, crisis links, and export and restore
 
@@ -22,8 +27,9 @@ iOS it can't schedule a notification without a server.
 |---|---|
 | `engine.js` | the analysis, ported operation for operation from `Sources/PainCore` |
 | `reporting.js` | the result wording and the clinician summary, ported from `Reporting.swift` |
+| `tracking.js` | symptoms, medications and the before-and-after comparison, ported from `Tracking.swift` |
 | `content.js` | the intervention library, practices and onboarding options |
-| `store.js` | IndexedDB storage and export/import (`litmus.export.v2`) |
+| `store.js` | IndexedDB storage and export/import (`litmus.export.v3`) |
 | `app.js` | the screens |
 | `sw.js` | offline shell, network first |
 

@@ -50,9 +50,14 @@ export function explain(a) {
     case 'insufficientData':
       return `There aren't enough logged days yet — at least ${v.minimum} in each period are needed before a comparison means anything. You have ${a.a.loggedDays} and ${a.b.loggedDays}.`;
     case 'tooFewCompletedBlocks':
+      if (a.overlappingTrials > 0) {
+        return 'Not enough on and off weeks have finished yet for the number of trials running alongside this one. Each overlapping trial has to be accounted for using the same weeks, so more of them are needed before this one can say anything.';
+      }
       return 'There are plenty of logged days, but not enough of the on and off weeks have finished yet. The comparison is made between whole weeks, so it needs several of each before it can say anything — keep going and this will fill in.';
     case 'underpowered':
       return `Your scores vary enough day to day that this trial could only have detected a change of about ${f(v.detectable)} points or larger. A change worth caring about is around ${f(v.important)}. A longer run would be needed to see something that size.`;
+    case 'entangledWithOtherTrial':
+      return "Another trial you ran at the same time switched on and off almost in step with this one, so their effects can't be told apart. Nothing you did wrong — it's the luck of two random orders lining up. Rerunning one of them on its own would settle it.";
     case 'differentialMissingness':
       return `You logged ${pct(1 - a.a.missingRate)} of days in one period and ${pct(1 - a.b.missingRate)} in the other. That gap matters: missed days tend to cluster on hard days, so comparing these two periods is partly comparing how much got logged, not how you felt.`;
     case 'flareImbalance': {
@@ -79,6 +84,8 @@ export function rerunSuggestion(a) {
         return "Your scores move enough day to day that no trial of a reasonable length would settle this one. That isn't a failure on your part — it means this question can't be answered by measuring daily pain alone. A different outcome measure, or a bigger intervention, would be the way in.";
       }
       return `Based on how much your scores moved, ${suggested} would give this a fair chance of showing an effect of the size that would matter.`;
+    case 'entangledWithOtherTrial':
+      return 'Rerun this one on its own, or at least not alongside the trial it lined up with.';
     case 'differentialMissingness':
     case 'flareImbalance':
       return "A rerun with the same design would likely work — the design wasn't the problem, the period was. Flare mode is there so a bad stretch still gets logged.";
@@ -97,6 +104,8 @@ export function describeThreat(t) {
     case 'poorAdherence': return `Self-reported adherence only ${pct(t.rate)} during intervention blocks.`;
     case 'shortConditionBlocks': return `Shortest condition block was ${t.days} days, below the 7-day minimum for a stable block mean.`;
     case 'possibleCarryover': return `Effect still present during washout (${signed(t.washoutDifference)} points); washout may be too short and the estimate biased toward the null.`;
+    case 'overlappingTrials':
+      return `${t.count === 1 ? 'Another trial' : `${t.count} other trials`} ran over some of the same days; ${t.count === 1 ? 'its' : 'their'} on/off schedule was included in the model, which widens the interval, and interactions between interventions cannot be excluded.`;
     case 'thresholdFromOwnVariability': return `No established minimal important difference for this measure; threshold set at ${f(t.important)} from the patient's own variability (0.5 SD).`;
     default: return t.kind;
   }
@@ -121,6 +130,7 @@ function verdictLine(a) {
     differentialMissingness: 'logging completeness differed substantially between conditions.',
     flareImbalance: 'flare days distributed unevenly between conditions.',
     effectSmallerThanNoise: 'estimate not separable from day-to-day variation.',
+    entangledWithOtherTrial: 'block schedule too closely aligned with a concurrent trial to separate the two.',
   }[v.reason];
   return 'Inconclusive — ' + short;
 }
@@ -165,6 +175,10 @@ export function clinicianSummary(a, patientLabel) {
     out.push(`differences, on ${a.degreesOfFreedom} degrees of freedom. This treats each block, not each day,`);
     out.push('as the unit of analysis, so within-block serial correlation does not inflate precision');
     out.push('and slow drift largely cancels within pairs.');
+    if (a.overlappingTrials > 0) {
+      out.push(`${a.overlappingTrials} concurrent trial(s) overlapped: block differences were regressed on the`);
+      out.push("difference in each concurrent trial's on-time, with one degree of freedom spent on each.");
+    }
   } else {
     out.push('95% interval: widest of a Newey–West autocorrelation-consistent standard error and a');
     out.push(`moving-block bootstrap, on ${a.degreesOfFreedom} degrees of freedom reduced for serial correlation.`);

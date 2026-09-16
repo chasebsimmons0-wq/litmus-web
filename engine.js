@@ -101,6 +101,19 @@ function standardDeviation(xs) {
   return Math.sqrt(ss / (xs.length - 1));
 }
 
+function correlation(x, y) {
+  if (x.length !== y.length || x.length <= 1) return 0;
+  const mx = mean(x), my = mean(y);
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < x.length; i++) {
+    sxy += (x[i] - mx) * (y[i] - my);
+    sxx += (x[i] - mx) * (x[i] - mx);
+    syy += (y[i] - my) * (y[i] - my);
+  }
+  if (!(sxx > 1e-12 && syy > 1e-12)) return 0;
+  return sxy / Math.sqrt(sxx * syy);
+}
+
 function solve(a, b) {
   const m = a.map((row) => row.slice());
   const v = b.slice();
@@ -338,6 +351,27 @@ export function makeTrial({
 export const plannedDays = (trial) =>
   Math.max(0, ...trial.phases.map((p) => p.startDay + p.length));
 
+// ── Overlapping trials (ConcurrentTrial in Model.swift) ────────────────────────
+// `other` is { trial, dayOffset }: a day of the analysed trial plus dayOffset is the
+// same calendar day in `other.trial`.
+
+// `lastDay`, when set, is the last day (in the other trial's numbering) it actually ran.
+function otherPhase(other, day) {
+  const own = day + other.dayOffset;
+  if (other.lastDay != null && own > other.lastDay) return null;
+  return phaseOnDay(other.trial, own);
+}
+
+export const isOnAt = (other, day) => (otherPhase(other, day)?.kind === 'b' ? 1 : 0);
+
+export function overlaps(other, base) {
+  const n = plannedDays(base);
+  for (let d = 0; d < n; d++) if (otherPhase(other, d)) return true;
+  return false;
+}
+
+export const blockCountForOverlaps = (overlapCount, standard = 10) => Math.max(standard, 2 * (overlapCount + 4));
+
 export function phaseOnDay(trial, day) {
   return trial.phases.find((p) => day >= p.startDay && day < p.startDay + p.length) || null;
 }
@@ -404,33 +438,60 @@ function bootstrapEffects(design, fittedValues, residuals, length) {
   return draws;
 }
 
-function pairedBlockEstimate(trial, byDay) {
+function pairedBlockEstimate(trial, byDay, otherSchedules = new Map(), otherCount = 0) {
   const blocks = condPhases(trial).slice().sort((a, b) => a.startDay - b.startDay);
-  const blockMean = (phase) => {
-    const scores = [];
-    for (let d = phase.startDay; d < phase.startDay + phase.length; d++) {
-      if (byDay.has(d)) scores.push(byDay.get(d).score);
-    }
-    return scores.length >= 3 ? mean(scores) : null;
+  const blockMeans = (phase) => {
+    const logged = [];
+    for (let d = phase.startDay; d < phase.startDay + phase.length; d++) if (byDay.has(d)) logged.push(d);
+    if (logged.length < 3) return null;
+    const score = mean(logged.map((d) => byDay.get(d).score));
+    const others = [];
+    for (let j = 0; j < otherCount; j++) others.push(mean(logged.map((d) => otherSchedules.get(d)?.[j] ?? 0)));
+    return { score, others };
   };
 
   const pendingA = [], pendingB = [], differences = [];
+  let otherDifferences = [];
+  const pair = (b, a) => {
+    differences.push(b.score - a.score);
+    otherDifferences.push(b.others.map((x, j) => x - a.others[j]));
+  };
   for (const block of blocks) {
-    const m = blockMean(block);
+    const m = blockMeans(block);
     if (m == null) continue;
     if (block.kind === 'a') {
       if (pendingB.length === 0) pendingA.push(m);
-      else differences.push(pendingB.shift() - m);
+      else pair(pendingB.shift(), m);
     } else {
       if (pendingA.length === 0) pendingB.push(m);
-      else differences.push(m - pendingA.shift());
+      else pair(m, pendingA.shift());
     }
   }
 
-  if (differences.length < 2) return null;
-  const se = standardDeviation(differences) / Math.sqrt(differences.length);
-  if (!Number.isFinite(se) || !(se > 0)) return null;
-  return { se, df: differences.length - 1 };
+  const m = differences.length;
+  const informative = [];
+  for (let j = 0; j < otherCount; j++) {
+    if (otherDifferences.some((row) => Math.abs(row[j]) > 1e-9)) informative.push(j);
+  }
+  otherDifferences = otherDifferences.map((row) => informative.map((j) => row[j]));
+  const df = m - 1 - informative.length;
+  if (!(m >= 2 && df >= 1)) return null;
+
+  if (informative.length === 0) {
+    const se = standardDeviation(differences) / Math.sqrt(m);
+    if (!Number.isFinite(se) || !(se > 0)) return null;
+    return { se, df };
+  }
+
+  const design = differences.map((_, i) => [1, ...otherDifferences[i]]);
+  const beta = ols(design, differences);
+  const inverse = invert(crossProduct(design));
+  if (!beta || !inverse) return null;
+  const fit = fitted(design, beta);
+  const rss = differences.reduce((acc, d, i) => acc + (d - fit[i]) * (d - fit[i]), 0);
+  const variance = rss / df * inverse[0][0];
+  if (!Number.isFinite(variance) || !(variance > 0)) return null;
+  return { se: Math.sqrt(variance), df };
 }
 
 function carryover(trial, byDay) {
@@ -479,8 +540,9 @@ function decide({ interval, detectable, thr, a, b, outcome }) {
   return { kind: 'inconclusive', reason: 'effectSmallerThanNoise' };
 }
 
-function threatsFor({ a, b, rho, trendPerWeek, trial, autocorrelationKnown, carry, effect, thr }) {
+function threatsFor({ a, b, rho, trendPerWeek, trial, autocorrelationKnown, carry, effect, thr, overlapping = 0 }) {
   const found = [];
+  if (overlapping > 0) found.push({ kind: 'overlappingTrials', count: overlapping });
   if (thr.source === 'baselineVariability') found.push({ kind: 'thresholdFromOwnVariability', important: thr.important });
 
   if (carry != null && effect != null && Math.abs(effect) > 1e-6
@@ -515,7 +577,7 @@ function threatsFor({ a, b, rho, trendPerWeek, trial, autocorrelationKnown, carr
   return found;
 }
 
-export function analyze(trial, entries) {
+export function analyze(trial, entries, concurrent = []) {
   const outcome = OUTCOMES[trial.outcomeId];
   const byDay = new Map();
   for (const e of entries) if (!byDay.has(e.day)) byDay.set(e.day, e);
@@ -531,6 +593,11 @@ export function analyze(trial, entries) {
     }
   }
 
+  const overlapping = concurrent.filter((o) => overlaps(o, trial));
+  const covariates = overlapping
+    .map((o) => days.map((d) => isOnAt(o, d)))
+    .filter((col) => new Set(col).size > 1);
+
   const a = summarize('a', trial, byDay);
   const b = summarize('b', trial, byDay);
   const thr = thresholds(outcome, Math.max(a.standardDeviation, b.standardDeviation));
@@ -540,8 +607,10 @@ export function analyze(trial, entries) {
 
   const hasEnoughData = a.loggedDays >= MINIMUM_DAYS_PER_CONDITION && b.loggedDays >= MINIMUM_DAYS_PER_CONDITION;
   const meanDay = mean(days);
-  const design = days.map((day, i) => [1, isB[i], (day - meanDay) / 7]);
-  const beta = hasEnoughData ? ols(design, scores) : null;
+  const design = days.map((day, i) => [1, isB[i], (day - meanDay) / 7, ...covariates.map((col) => col[i])]);
+  const entangled = covariates.some((col) => Math.abs(correlation(col, isB)) > 0.8);
+  const solved = entangled ? null : ols(design, scores);
+  const beta = hasEnoughData ? solved : null;
 
   if (!beta) {
     return {
@@ -549,10 +618,12 @@ export function analyze(trial, entries) {
       low: -Infinity, high: Infinity, standardError: Infinity,
       method: 'withinSeries', degreesOfFreedom: 0, detectable: Infinity,
       sandwichSE: null, bootstrapSE: null,
-      verdict: { kind: 'inconclusive', reason: 'insufficientData', minimum: MINIMUM_DAYS_PER_CONDITION },
+      verdict: hasEnoughData
+        ? { kind: 'inconclusive', reason: 'entangledWithOtherTrial' }
+        : { kind: 'inconclusive', reason: 'insufficientData', minimum: MINIMUM_DAYS_PER_CONDITION },
       a, b, rho: 0, trendPerWeek: 0,
-      threats: threatsFor({ a, b, rho: 0, trendPerWeek: 0, trial, autocorrelationKnown: false, carry, effect: null, thr }),
-      analysedDays: days.length, thresholds: thr, carryover: carry,
+      threats: threatsFor({ a, b, rho: 0, trendPerWeek: 0, trial, autocorrelationKnown: false, carry, effect: null, thr, overlapping: overlapping.length }),
+      analysedDays: days.length, thresholds: thr, carryover: carry, overlappingTrials: overlapping.length,
     };
   }
 
@@ -576,11 +647,14 @@ export function analyze(trial, entries) {
   const effectiveN = days.length / tau;
   const withinSeriesDF = Math.max(3, Math.round(effectiveN) - design[0].length);
   const withinSeries = { se: Math.max(hacSE ?? 0, bootstrapSE), df: withinSeriesDF };
-  const paired = pairedBlockEstimate(trial, byDay);
+  const otherSchedules = new Map(days.map((d, i) => [d, covariates.map((col) => col[i])]));
+  const paired = pairedBlockEstimate(trial, byDay, otherSchedules, covariates.length);
 
   const pairsAvailable = (paired?.df ?? 0) + 1;
   const blockUsable = paired != null && pairsAvailable >= TUNING.minimumPairsForBlockEstimator;
-  const candidates = blockUsable ? [paired] : [withinSeries, ...(paired ? [paired] : [])];
+  const overlapTooDense = covariates.length > 0 && !blockUsable;
+  const candidates = overlapTooDense ? [{ se: Infinity, df: 0 }]
+    : blockUsable ? [paired] : [withinSeries, ...(paired ? [paired] : [])];
 
   // Swift's max(by:) keeps the first of equal maxima.
   let chosen = candidates[0];
@@ -599,8 +673,8 @@ export function analyze(trial, entries) {
     sandwichSE: hacSE, bootstrapSE,
     verdict: decide({ interval, detectable, thr, a, b, outcome }),
     a, b, rho, trendPerWeek,
-    threats: threatsFor({ a, b, rho, trendPerWeek, trial, autocorrelationKnown: true, carry, effect, thr }),
-    analysedDays: days.length, thresholds: thr, carryover: carry,
+    threats: threatsFor({ a, b, rho, trendPerWeek, trial, autocorrelationKnown: true, carry, effect, thr, overlapping: overlapping.length }),
+    analysedDays: days.length, thresholds: thr, carryover: carry, overlappingTrials: overlapping.length,
   };
 }
 
@@ -623,10 +697,12 @@ function blockMeanVariance(sd, rho, days) {
   return sd * sd / (days * days) * (days + 2 * weighted);
 }
 
-export function detectableEffect(sd, rho, blockCount, blockDays, outcome = OUTCOMES['pain.intensity-nrs-11']) {
+export function detectableEffect(sd, rho, blockCount, blockDays, outcome = OUTCOMES['pain.intensity-nrs-11'], overlapCount = 0) {
   const pairs = Math.trunc(blockCount / 2);
-  if (pairs < 2 || !(sd > 0)) return Infinity;
+  const df = pairs - 1 - overlapCount;
+  if (pairs < 2 || !(df >= 2 || (overlapCount === 0 && df >= 1)) || !(sd > 0)) return Infinity;
   const variance = blockMeanVariance(sd, rho, blockDays);
-  const standardError = Math.sqrt(2 * variance / pairs);
-  return thresholds(outcome, sd).trivial + (tCritical95(pairs - 1) + 1.15) * standardError;
+  const inflation = overlapCount === 0 ? 1 : 1.08 * Math.sqrt(pairs / (pairs - overlapCount));
+  const standardError = Math.sqrt(2 * variance / pairs) * inflation;
+  return thresholds(outcome, sd).trivial + (tCritical95(df) + 1.15) * standardError;
 }
