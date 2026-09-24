@@ -197,11 +197,14 @@ function verdictLine(a) {
 
 const dateText = (d) => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
-export function clinicianSummary(a, patientLabel) {
+export function clinicianSummary(a, patientLabel, finishedOn = null) {
   const trial = a.trial;
   const planned = Math.max(...trial.phases.map((p) => p.startDay + p.length));
   const start = new Date(trial.startDate);
-  const end = new Date(start); end.setDate(end.getDate() + planned - 1);
+  let end = new Date(start); end.setDate(end.getDate() + planned - 1);
+  // A trial ended early is described by the days it actually ran.
+  if (finishedOn && new Date(finishedOn) < end) end = new Date(finishedOn);
+  const ran = Math.round((end - start) / 86400000) + 1;
   const outcomeName = a.outcome.displayName.toLowerCase();
   const out = [];
   const name = (s) => (s === 'a' ? trial.conditionA.displayName : trial.conditionB.displayName);
@@ -232,7 +235,7 @@ export function clinicianSummary(a, patientLabel) {
   } else {
     out.push(`Block order strictly alternating, not randomised: ${sequence}.`);
   }
-  out.push(`Period: ${dateText(start)} to ${dateText(end)} (${planned} days).`);
+  out.push(`Period: ${dateText(start)} to ${dateText(end)} (${ran < planned ? `${ran} of ${planned} planned days; ended early` : `${planned} days`}).`);
   out.push(`Outcome: ${a.outcome.displayName}, self-reported once daily.`);
   out.push('Point estimate: least-squares contrast of condition means adjusted for linear time trend.');
   if (a.method === 'pairedBlocks') {
@@ -253,7 +256,8 @@ export function clinicianSummary(a, patientLabel) {
 
   const row = (s) => `${name(s.label)}: ${s.loggedDays}/${s.plannedDays} days logged (${pct(1 - s.missingRate)}), mean ${f(s.meanScore)}, SD ${f(s.standardDeviation)}, flare days ${s.flareDays}.`;
   out.push('DATA COMPLETENESS', row(a.a), row(a.b), `Days used in analysis: ${a.analysedDays}.`);
-  if (a.b.adherentDays != null) out.push(`Self-reported adherence during intervention blocks: ${a.b.adherentDays}/${a.b.loggedDays} days.`);
+  if (a.b.adherentDays != null) out.push(`Self-reported adherence during ${trial.conditionB.displayName} blocks: ${a.b.adherentDays}/${a.b.loggedDays} days.`);
+  if (comparison && a.a.adherentDays != null) out.push(`Self-reported adherence during ${trial.conditionA.displayName} blocks: ${a.a.adherentDays}/${a.a.loggedDays} days.`);
   out.push('');
 
   out.push('RESULT');

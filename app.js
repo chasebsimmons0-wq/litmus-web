@@ -6,7 +6,7 @@ import {
   SITES, QUALITIES, FACTORS, RED_FLAGS, DIAGNOSES, LIBRARY, PRACTICES, PAIN_RAMP,
   suggestedOrder, customIntervention, NERVE_QUALITIES, widespreadFeatureCount, LESSONS, SUPPORT,
 } from './content.js';
-import { careRecord } from './record.js';
+import { careRecord, shortVerdict } from './record.js';
 import { ember } from './mascot.js';
 import { anonymisedResult } from './insight.js';
 import { LocalCommunity, cardSummary, NOTE_LIMIT } from './community.js';
@@ -81,6 +81,9 @@ function header(title, lead) {
     h('h1.display', {}, title),
     lead && h('p.reading', {}, lead));
 }
+
+/** A trial's name: the option, or both options when it's a comparison. */
+const trialName = (t) => (isComparison(t) ? `${t.conditionB.displayName} vs ${t.conditionA.displayName}` : t.conditionB.displayName);
 
 function card(kind, ...kids) { return h(`section.card${kind ? '.' + kind : ''}`, {}, ...kids); }
 
@@ -212,6 +215,8 @@ function restoreButton() {
 const STEPS = ['welcome', 'sites', 'qualities', 'history', 'factors', 'safety', 'picture'];
 
 function onboarding() {
+  // A draft belongs to one person: switching profile mid-onboarding starts theirs afresh.
+  if (ui.draftFor !== store.person.id) { ui.draft = null; ui.step = 0; ui.draftFor = store.person.id; }
   ui.draft ??= structuredClone(store.profile);
   const d = ui.draft;
   const step = STEPS[ui.step];
@@ -354,7 +359,7 @@ function todayTab() {
     kids.push(card('', pools.map(({ record, day }) => {
       const kind = phaseOnDay(record.trial, day).kind;
       const what = conditionFor(record.trial, kind)?.displayName ?? (kind === 'a' ? 'Off' : 'Between blocks');
-      return h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, record.trial.conditionB.displayName),
+      return h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, trialName(record.trial)),
         h('span.caption', {}, `${what} · day ${day + 1} of ${plannedDays(record.trial)}`));
     })));
   }
@@ -476,7 +481,8 @@ function trialTab() {
   const day = store.currentDay;
   const logged = store.entries.length;
   const elapsed = store.elapsedDays;
-  const missed = Math.max(0, elapsed - logged - (store.today ? 0 : day != null ? 1 : 0));
+  const loggedToday = day != null && store.entries.some((e) => e.day === day);
+  const missed = Math.max(0, elapsed - logged - (loggedToday || day == null ? 0 : 1));
   const blocks = trial.phases.filter((p) => p.kind !== 'washout');
   const doneBlocks = blocks.filter((p) => p.startDay + p.length <= (day ?? plannedDays(trial))).length;
 
@@ -519,7 +525,7 @@ function trialSwitcher() {
     active.map((r) => h(`button.chip${r.id === store.running.id ? '.on' : ''}`, {
       role: 'tab', 'aria-selected': String(r.id === store.running.id), style: { whiteSpace: 'nowrap' },
       onclick: () => store.focus(r.id),
-    }, r.trial.conditionB.displayName)));
+    }, trialName(r.trial))));
 }
 
 function baselineStatus() {
@@ -548,7 +554,7 @@ function baselineStatus() {
 function setupSheet() {
   const profile = store.profile;
   // Testing the same thing twice at once would compare it with itself.
-  const running = new Set(store.activeRecords.map((r) => r.trial.conditionB.id));
+  const running = new Set(store.activeRecords.flatMap((r) => (isComparison(r.trial) ? [r.trial.conditionB.id, r.trial.conditionA.id] : [r.trial.conditionB.id])));
   const menu = suggestedOrder(profile).filter((i) => !running.has(i.id));
   const hidden = LIBRARY.filter((i) => !menu.includes(i) && !running.has(i.id));
   const overlaps = store.overlapsForNewTrial;
@@ -580,7 +586,9 @@ function setupSheet() {
   const start = h('button.btn.primary', { disabled: !chosen, onclick: async () => {
     const pick = st.pick === 'custom' ? customIntervention(st.custom.trim()) : chosen;
     await store.startTrial({ intervention: pick, comparator, outcomeId: st.outcomeId, note: st.note.trim() || null, blockDays: shape.blockDays, washoutDays: shape.washoutDays });
-    ui.setup = null; ui.sheet = null; ui.tab = 'today'; render();
+    ui.setup = null; ui.sheet = null; ui.tab = 'today';
+    checkForCrisis(`${st.custom} ${st.note}`);
+    render();
     toast('Trial started. Today is day 1.');
   } }, 'Start the trial today');
 
@@ -647,7 +655,7 @@ function resultBlock(a, record) {
 
   return h('div.stack', {},
     h('div.row', {}, guide(a.verdict.kind === 'inconclusive' ? 'think' : 'main'),
-      h('p.label.sage', {}, isComparison(trial) ? `${trial.conditionB.displayName} vs ${trial.conditionA.displayName}` : trial.conditionB.displayName)),
+      h('p.label.sage', {}, trialName(trial))),
     h('h1.display', {}, title),
     h('p.reading', {}, headline(a)),
     ready && Number.isFinite(a.low) && card('',
@@ -664,7 +672,7 @@ function resultBlock(a, record) {
         && h('button.btn.outline', { onclick: () => setUpRerun(a) }, 'Set up this rerun')),
     card('', h('p.label', {}, 'Scores'), trace(record.entries, trial, { today: record.finishedOn ? null : store.currentDay }), traceLegend(trial)),
     ready && a.threats.length > 0 && card('', h('p.label', {}, 'Worth knowing'), a.threats.map((t) => h('p.body', {}, describeThreat(t)))),
-    h('button.btn.outline', { onclick: () => openSheet('clinician', { a }) }, 'Summary for a clinician'));
+    h('button.btn.outline', { onclick: () => openSheet('clinician', { a, finishedOn: record.finishedOn }) }, 'Summary for a clinician'));
 }
 
 // Opens trial setup filled in with the same question and a length sized to the result.
@@ -697,8 +705,8 @@ function resultTab() {
       history.map((r) => {
         const ra = store.analysis(r);
         return h('button.check', { onclick: () => openSheet('past', { record: r }) },
-          h('div.grow', {}, h('div', { style: { fontSize: '16px' } }, r.trial.conditionB.displayName),
-            h('p.caption', {}, `Finished ${new Date(r.finishedOn).toLocaleDateString()} · ${ra ? { meaningful: 'clear change', probable: 'some change', null: 'no meaningful effect', inconclusive: 'not settled' }[ra.verdict.kind] : 'no data'}`)),
+          h('div.grow', {}, h('div', { style: { fontSize: '16px' } }, trialName(r.trial)),
+            h('p.caption', {}, `${r.endedEarly ? 'Ended early' : 'Finished'} ${new Date(r.finishedOn).toLocaleDateString()} · ${shortVerdict(ra)}`)),
           h('span.muted', {}, '›'));
       })));
 }
@@ -817,6 +825,8 @@ function checkForCrisis(text) {
   if (!mentionsCrisis(text) || text === lastCrisisText) return;
   lastCrisisText = text;
   ui.sheet = { kind: 'support' };
+  ui.crisisAt = Date.now();
+  return true;
 }
 
 // Reminder times are a setting of this device rather than of a profile.
@@ -949,7 +959,7 @@ function symptomsSheet() {
     h('p.label', {}, 'Add'),
     h('div.chips', {}, COMMON_SYMPTOMS.filter((n) => !names.has(n.toLowerCase()))
       .map((n) => h('button.chip', { onclick: () => store.addSymptom(n) }, `+ ${n}`))),
-    h('div.row', {}, field, h('button.btn.outline', { style: { width: 'auto', padding: '0 18px' }, onclick: () => store.addSymptom(custom) }, 'Add')),
+    h('div.row', {}, field, h('button.btn.outline', { style: { width: 'auto', padding: '0 18px' }, onclick: () => { checkForCrisis(custom); store.addSymptom(custom); } }, 'Add')),
   ];
 }
 
@@ -972,14 +982,14 @@ function addMedicationSheet() {
   const form = { name: '', dose: '', startedOn: dayKey(), note: '' };
   const save = h('button.btn.primary', { disabled: true, onclick: async () => {
     await store.addMedication(form);
-    checkForCrisis(form.note);
+    checkForCrisis([form.name, form.dose, form.note].filter(Boolean).join(' '));
     if (ui.sheet?.kind === 'support') render(); else openSheet('medications');
   } }, 'Save');
   return [
-    h('input.field', { placeholder: 'Name', oninput: (e) => { form.name = e.target.value; save.disabled = !form.name.trim(); } }),
-    h('input.field', { placeholder: 'Dose (optional)', oninput: (e) => { form.dose = e.target.value; } }),
+    h('input.field', { placeholder: 'Name', 'aria-label': 'Medication name', oninput: (e) => { form.name = e.target.value; save.disabled = !form.name.trim(); } }),
+    h('input.field', { placeholder: 'Dose (optional)', 'aria-label': 'Dose', oninput: (e) => { form.dose = e.target.value; } }),
     h('label.caption', {}, 'Started'),
-    h('input.field', { type: 'date', value: form.startedOn, max: dayKey(), oninput: (e) => { form.startedOn = e.target.value || dayKey(); } }),
+    h('input.field', { type: 'date', 'aria-label': 'Started', value: form.startedOn, max: dayKey(), oninput: (e) => { form.startedOn = e.target.value || dayKey(); } }),
     h('textarea.field', { placeholder: 'Anything to remember (optional)', rows: 2, oninput: (e) => { form.note = e.target.value; } }),
     h('p.caption', {}, 'Written as you’d say it, and kept on this device.'),
     save,
@@ -1023,13 +1033,13 @@ function medicationSheet(id) {
       h('p.caption', {}, 'Averages for the 4 weeks before starting and the time since. This can’t show the medication caused a change: anything else that shifted at the same time is mixed in, including simply expecting it to help. Worth bringing to your prescriber, not a verdict.')),
     !m.stoppedOn && card('', h('p.label', {}, 'Dose changed'),
       h('input.field', { placeholder: 'New dose', oninput: (e) => { newDose = e.target.value; } }),
-      h('input.field', { type: 'date', value: changeOn, max: dayKey(), oninput: (e) => { changeOn = e.target.value || dayKey(); } }),
+      h('input.field', { type: 'date', 'aria-label': 'Date of the dose change', value: changeOn, max: dayKey(), oninput: (e) => { changeOn = e.target.value || dayKey(); } }),
       h('button.btn.outline', { onclick: async () => {
         if (!newDose.trim()) return;
         await store.updateMedication(id, (x) => { x.doseChanges.push({ date: changeOn, dose: newDose.trim() }); });
       } }, 'Record change')),
     !m.stoppedOn && card('', h('p.label', {}, 'Stopped'),
-      h('input.field', { type: 'date', value: stopOn, max: dayKey(), oninput: (e) => { stopOn = e.target.value || dayKey(); } }),
+      h('input.field', { type: 'date', 'aria-label': 'Date stopped', value: stopOn, max: dayKey(), oninput: (e) => { stopOn = e.target.value || dayKey(); } }),
       h('button.btn.outline', { onclick: () => store.updateMedication(id, (x) => { x.stoppedOn = stopOn; }) }, 'Mark as stopped')),
     danger,
   ];
@@ -1074,7 +1084,7 @@ function listCard(label, field, placeholder, caption) {
   return card('', h('p.label', {}, label),
     items.map((x, i) => h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, x),
       h('button.link', { onclick: () => store.removeProfileItem(field, i) }, 'Remove'))),
-    h('div.row', {}, input, h('button.btn.outline', { 'aria-label': `Add to ${label.toLowerCase()}`, style: { width: 'auto', padding: '0 18px' }, onclick: () => store.addProfileItem(field, draft) }, 'Add')),
+    h('div.row', {}, input, h('button.btn.outline', { 'aria-label': `Add to ${label.toLowerCase()}`, style: { width: 'auto', padding: '0 18px' }, onclick: () => { checkForCrisis(draft); store.addProfileItem(field, draft); } }, 'Add')),
     h('p.caption', {}, caption));
 }
 
@@ -1089,7 +1099,7 @@ function recordSheet() {
     card('', h('p.label', {}, 'Your questions'),
       store.questions.map((q) => h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, q.text),
         h('button.link', { onclick: () => store.removeQuestion(q.id) }, 'Remove'))),
-      h('div.row', {}, field, h('button.btn.outline', { style: { width: 'auto', padding: '0 18px' }, onclick: () => store.addQuestion(draft) }, 'Add')),
+      h('div.row', {}, field, h('button.btn.outline', { style: { width: 'auto', padding: '0 18px' }, onclick: () => { checkForCrisis(draft); store.addQuestion(draft); } }, 'Add')),
       h('p.caption', {}, 'Yours come first. Litmus adds a few more from what you’ve logged — questions for the clinician, never advice.')),
     h('section.card.print-me', {}, h('pre.pre', {}, text)),
     h('button.btn.outline', { onclick: () => window.print() }, 'Print or save as PDF'),
@@ -1143,7 +1153,7 @@ function communitySheet(sh) {
     body = done.length === 0
       ? [h('p.body', {}, 'Sharing starts from a finished trial, so there’s something real to show. Once one is finished, it can be shared here.')]
       : [
-          done.length > 1 && h('div.chips', {}, done.map((r) => h(`button.chip${r === chosen ? '.on' : ''}`, { onclick: () => go('share', { pick: r.id }) }, r.trial.conditionB.displayName))),
+          done.length > 1 && h('div.chips', {}, done.map((r) => h(`button.chip${r === chosen ? '.on' : ''}`, { onclick: () => go('share', { pick: r.id }) }, trialName(r.trial)))),
           card('', resultCard(result)),
           h('p.caption', {}, `Shared as ${cm.handle}. Only what’s on the card is shared — no name, no dates, no notes from your log.`),
           area, count,
@@ -1191,7 +1201,12 @@ function communitySheet(sh) {
 // ── sheets ───────────────────────────────────────────────────────────────────────
 
 function openSheet(kind, data = {}) { ui.sheet = { kind, ...data }; render(); }
-function closeSheet() { ui.sheet = null; ui.setup = null; render(); }
+function closeSheet() {
+  // Leaving a text field fires the crisis check just before a "Done" tap lands; the
+  // support sheet it raised must not be closed by that same tap.
+  if (ui.sheet?.kind === 'support' && Date.now() - (ui.crisisAt ?? 0) < 800) return;
+  ui.sheet = null; ui.setup = null; render();
+}
 
 function sheet() {
   const sh = ui.sheet;
@@ -1221,7 +1236,7 @@ function sheet() {
     case 'addMedication': title = 'Add a medication'; body = addMedicationSheet(); break;
     case 'medication': title = store.medications.find((x) => x.id === sh.id)?.name ?? 'Medication'; body = medicationSheet(sh.id); break;
     case 'clinician': {
-      const text = clinicianSummary(sh.a, store.person.name);
+      const text = clinicianSummary(sh.a, store.person.name, sh.finishedOn);
       title = 'For a clinician';
       body = [h('p.body', {}, 'One page to show or send. It states the method, the result and its limits, and recommends nothing.'),
         h('section.card.print-me', {}, h('pre.pre', {}, text)),
@@ -1240,7 +1255,7 @@ function sheet() {
     case 'endTrial': {
       const done = store.focusedIsFinished;
       title = done ? 'Close this trial' : 'End this trial';
-      body = [h('p.label.sage', {}, store.trial?.conditionB.displayName ?? ''),
+      body = [h('p.label.sage', {}, store.trial ? trialName(store.trial) : ''),
         h('p.reading', {}, done
           ? 'This keeps the result in your history and frees you to test something else.'
           : 'Ending early keeps what you’ve logged, but a shorter trial can say much less. The result is saved in your history either way.'),
@@ -1250,7 +1265,7 @@ function sheet() {
     }
     default: return null;
   }
-  const panel = h('div.sheet', { role: 'dialog', 'aria-modal': 'true', 'aria-label': title, onclick: (e) => e.stopPropagation() },
+  const panel = h('div.sheet', { role: 'dialog', 'aria-modal': 'true', 'aria-label': title, tabindex: '-1', onclick: (e) => e.stopPropagation() },
     h('div.sheet-head', {}, h('h2', {}, title), h('button.link', { onclick: closeSheet }, 'Done')),
     h('div.stack', {}, body));
   return h('div.sheet-backdrop', { onclick: closeSheet }, panel);
@@ -1326,6 +1341,8 @@ function tabbar() {
       label)));
 }
 
+let lastOpened = null;
+
 function render() {
   const y = window.scrollY;
   const sheetY = root.querySelector('.sheet')?.scrollTop ?? 0;
@@ -1342,14 +1359,27 @@ function render() {
   if (ui.sheet && store.person) kids.push(sheet());
   root.replaceChildren(...kids);
   document.body.style.overflow = ui.sheet ? 'hidden' : '';
+  // With a sheet open, the screen behind it is out of reach for keyboards and screen
+  // readers, and focus moves into the sheet when it first opens.
+  for (const el of root.children) el.inert = !!ui.sheet && !el.classList.contains('sheet-backdrop');
+  const opened = ui.sheet ? `${ui.sheet.kind}:${ui.sheet.view ?? ''}` : null;
+  if (opened && opened !== lastOpened && !focusedName) root.querySelector('.sheet')?.focus();
+  lastOpened = opened;
   window.scrollTo(0, y);
   const panel = root.querySelector('.sheet');
   if (panel) panel.scrollTop = sheetY;
   if (focusedName) root.querySelector(`[placeholder="${CSS.escape(focusedName)}"]`)?.focus();
 }
 
-// A new day can begin while the app sits open.
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ui.sheet) closeSheet(); });
+
+// A new day can begin while the app sits open: on return to it, and at midnight.
+function atMidnight() {
+  const next = new Date(); next.setHours(24, 0, 5, 0);
+  setTimeout(() => { lastDay = new Date().toDateString(); ui.flareMore = false; render(); atMidnight(); }, next - new Date());
+}
 let lastDay = new Date().toDateString();
+atMidnight();
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && new Date().toDateString() !== lastDay) { lastDay = new Date().toDateString(); ui.flareMore = false; render(); }
 });

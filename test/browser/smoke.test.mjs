@@ -149,3 +149,20 @@ test('community preview: share a finished trial, reply, and crisis replies are h
   await page.getByRole('dialog', { name: /carry this alone/ }).waitFor();
   assert.deepEqual(errors, []);
 });
+
+test('onboarding answers stay with the person who gave them', async () => {
+  const context = await browser.newContext({ serviceWorkers: 'block' });
+  const page = await context.newPage();
+  await page.goto(base);
+  await page.getByPlaceholder('A name, or just “Me”').fill('Alice');
+  await page.getByRole('button', { name: 'Start', exact: true }).click();
+  await page.getByRole('button', { name: 'Begin' }).click();
+  await page.getByRole('button', { name: 'Neck', exact: true }).click();
+  await page.getByRole('button', { name: 'Profile' }).click();
+  await page.getByRole('button', { name: 'Switch profile' }).click();
+  await page.getByPlaceholder('A name, or just “Me”').fill('Bob');
+  await page.getByRole('button', { name: 'Start', exact: true }).click();
+  await page.getByRole('button', { name: 'Begin' }).click();
+  assert.equal(await page.getByRole('button', { name: 'Neck', exact: true }).getAttribute('aria-pressed'), 'false');
+  await context.close();
+});

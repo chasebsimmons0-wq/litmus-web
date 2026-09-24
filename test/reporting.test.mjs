@@ -26,3 +26,14 @@ test('the clinician summary describes the comparison design', () => {
   assert.match(text, /Do Heat and TENS differ in their effect on average daily pain\?/);
   assert.match(text, /Alternating treatments, two active conditions/);
 });
+
+test('a trial ended early is described by the days it ran, and adherence names each option', () => {
+  const r = result({ kind: 'null' }, 0.1);
+  r.a.adherentDays = 20; r.b.adherentDays = 25;
+  const start = new Date(cmp.startDate);
+  const ended = new Date(start); ended.setDate(ended.getDate() + 39);
+  const text = clinicianSummary(r, 'Sam', ended.toISOString());
+  assert.match(text, /\(40 of 97 planned days; ended early\)/);
+  assert.match(text, /adherence during Heat blocks: 25\/30/);
+  assert.match(text, /adherence during TENS blocks: 20\/30/);
+});

@@ -189,3 +189,4 @@ select.field { appearance: none; }
   .print-me { border: 0; padding: 0; background: none; }
   .pre { font-size: 10.5pt; color: #000; }
 }
+.sheet:focus { outline: none; }

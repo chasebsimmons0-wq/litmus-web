@@ -249,9 +249,11 @@ export class Store {
   }
 
   /** Every other trial, positioned against this one; the engine keeps the overlaps. */
-  concurrentWith(trial) {
+  concurrentWith(trial, finishedOn = null) {
     return (this.person?.trials ?? [])
       .filter((r) => r.trial.id !== trial.id)
+      // A trial that started after this one ended can't have overlapped it.
+      .filter((r) => !finishedOn || daysBetween(finishedOn, new Date(r.trial.startDate)) <= 0)
       .map((r) => ({
         trial: r.trial,
         dayOffset: daysBetween(r.trial.startDate, new Date(trial.startDate)),
@@ -261,7 +263,7 @@ export class Store {
 
   analysis(record = this.running) {
     if (!record) return null;
-    return analyze(record.trial, record.entries, this.concurrentWith(record.trial));
+    return analyze(record.trial, record.entries, this.concurrentWith(record.trial, record.finishedOn));
   }
 
   // Baseline
@@ -526,6 +528,8 @@ export class Store {
     const p = this.person;
     const plainEntry = (e) => {
       const out = { day: e.day, score: e.score, isFlare: !!e.isFlare };
+      // Kept so a restored day's average still takes further readings correctly.
+      if (e.sampleCount > 1) { out.sampleCount = e.sampleCount; out.sampleSum = e.sampleSum; }
       if (e.adhered != null) out.adhered = e.adhered;
       if (e.note) out.note = e.note;
       return out;
@@ -580,7 +584,10 @@ export class Store {
     }
     // Everything is read before anything is written, so a file that fails halfway
     // leaves no half-restored person behind.
-    const readEntry = (e) => entry(e.day, e.score, { adhered: e.adhered ?? null, isFlare: !!e.isFlare, note: e.note ?? null });
+    const readEntry = (e) => entry(e.day, e.score, {
+      adhered: e.adhered ?? null, isFlare: !!e.isFlare, note: e.note ?? null,
+      ...(e.sampleCount > 1 && Number.isFinite(e.sampleSum) ? { sampleCount: e.sampleCount, sampleSum: e.sampleSum } : {}),
+    });
     const trials = [];
     for (const c of data.completedTrials ?? []) {
       const trial = fromNativeTrial(c.trial);
