@@ -40,6 +40,9 @@ export function reminderCalendar(times, { url, now = new Date() } = {}) {
   if (!parsed.length) throw new Error('No valid reminder time');
   const summary = 'Litmus: how is today?';
   const description = ['One number, a few seconds. A missed day is simply left out.', url].filter(Boolean).join('\n\n');
+  // Ids scoped to wherever the app is served from, a domain the project controls.
+  let host = 'localhost';
+  try { host = new URL(url).host || host; } catch {}
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Litmus//Daily reminder//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
   for (const time of parsed) {
     const [hh, mm] = parseTime(time);
@@ -47,7 +50,7 @@ export function reminderCalendar(times, { url, now = new Date() } = {}) {
       'BEGIN:VEVENT',
       // Stable per time, so importing the same reminder again updates it rather than
       // adding a second one, where the calendar honours that.
-      `UID:litmus-daily-${pad(hh)}${pad(mm)}@litmus.app`,
+      `UID:litmus-daily-${pad(hh)}${pad(mm)}@${host}`,
       `DTSTAMP:${utcStamp(now)}`,
       `DTSTART:${localStamp(now, hh, mm)}`,
       'DURATION:PT5M',

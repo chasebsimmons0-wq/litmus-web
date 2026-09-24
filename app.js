@@ -1,7 +1,7 @@
 // Litmus — web. The screens, built on the same engine as the native app.
 
-import { OUTCOMES, detectableEffect, plannedDays, phaseOnDay, blockCountForOverlaps, isComparison, conditionFor } from './engine.js';
-import { Store, daysBetween } from './store.js';
+import { OUTCOMES, detectableEffect, plannedDays, phaseOnDay, blockCountForOverlaps, isComparison, conditionFor, PAIN_ID, TRIAL_DEFAULTS, trialLength } from './engine.js';
+import { Store, daysBetween, BASELINE_MIN_DAYS, BASELINE_SUGGESTED_DAYS } from './store.js';
 import {
   SITES, QUALITIES, FACTORS, RED_FLAGS, DIAGNOSES, LIBRARY, PRACTICES, PAIN_RAMP,
   suggestedOrder, customIntervention, NERVE_QUALITIES, widespreadFeatureCount, LESSONS, SUPPORT,
@@ -13,7 +13,7 @@ import { LocalCommunity, cardSummary, NOTE_LIMIT } from './community.js';
 import { headline, rerunSuggestion, describeThreat, clinicianSummary } from './reporting.js';
 import { COMMON_SYMPTOMS, dayKey, keyToDate, beforeAfter, BEFORE_AFTER_MINIMUM_DAYS } from './tracking.js';
 import { reminderCalendar, parseTime } from './reminders.js';
-import { mentionsCrisis } from './safety.js';
+import { mentionsCrisis, crisisLine } from './safety.js';
 
 const store = new Store();
 const ui = { tab: 'today', sheet: null, step: 0, draft: null, practice: null };
@@ -515,11 +515,11 @@ function trialSwitcher() {
 function baselineStatus() {
   const base = store.person.baseline;
   const sd = store.baselineVariability;
-  const target = 21;
+  const target = BASELINE_SUGGESTED_DAYS;
   return h('div.stack', {},
     store.completed.length > 0
       ? header('Ready for the next one', 'Your daily scores carry on from here. Choose something new to test whenever you like.')
-      : header('Your baseline', 'Before testing anything, a couple of weeks of ordinary days shows how much your pain moves by itself.'),
+      : header('Your baseline', 'Before testing anything, a week or two of ordinary days shows how much your pain moves by itself.'),
     card('', h('div.row', { style: { alignItems: 'baseline' } }, h('span.number', {}, base.length), h('span.muted', {}, `of ${target} days scored`)),
       h('div.row', { style: { gap: '4px', flexWrap: 'wrap' } }, Array.from({ length: Math.max(target, base.length) }, (_, d) => {
         const e = base.find((x) => x.day === d);
@@ -529,8 +529,8 @@ function baselineStatus() {
     base.length >= 3 && card('', h('p.label', {}, 'So far'), trace(base, null), traceLegend(null)),
     sd != null
       ? card('sage', h('p.label.sage', {}, 'Ready when you are'),
-          h('p.body', {}, `Your scores move by about ${fmt(sd)} points from day to day. A standard trial could reliably pick up a change of about ${fmt(detectableEffect(sd, 0.5, 10, 7))} points.`))
-      : h('p.body', {}, `Keep scoring. After ${plural(Math.max(0, 10 - base.length), 'more day')} the trial can be sized to your own variability.`),
+          h('p.body', {}, `Your scores move by about ${fmt(sd)} points from day to day. A standard trial could reliably pick up a change of about ${fmt(detectableEffect(sd, 0.5, TRIAL_DEFAULTS.blockCount, TRIAL_DEFAULTS.blockDays))} points.`))
+      : h('p.body', {}, `Keep scoring. After ${plural(Math.max(0, BASELINE_MIN_DAYS - base.length), 'more day')} the trial can be sized to your own variability.`),
     h('button.btn.primary', { onclick: () => openSheet('setup') }, 'Set up a trial'),
     h('p.caption', {}, 'Keep logging as long as you like — more baseline only sharpens it.'));
 }
@@ -543,16 +543,18 @@ function setupSheet() {
   const hidden = LIBRARY.filter((i) => !menu.includes(i) && !running.has(i.id));
   const overlaps = store.overlapsForNewTrial;
   const blocks = blockCountForOverlaps(overlaps);
-  const total = blocks * 7 + (blocks - 1) * 3;
-  const st = ui.setup ??= { pick: menu[0]?.id ?? 'custom', custom: '', outcomeId: 'pain.intensity-nrs-11', note: '', against: 'usual' };
-  const sd = store.baselineVariability;
+  const shape = { ...TRIAL_DEFAULTS, blockCount: blocks };
+  const total = trialLength(shape);
+  const st = ui.setup ??= { pick: menu[0]?.id ?? 'custom', custom: '', outcomeId: PAIN_ID, note: '', against: 'usual' };
+  // The baseline only scores pain, so its variability only sizes pain trials.
+  const sd = st.outcomeId === PAIN_ID ? store.baselineVariability : null;
   const chosen = st.pick === 'custom' ? (st.custom.trim() ? customIntervention(st.custom.trim()) : null) : LIBRARY.find((i) => i.id === st.pick);
   // Comparing with a second option instead of usual care. Only from the library, and
   // never the same thing twice.
   if (st.against === st.pick) st.against = 'usual';
   const comparator = st.against === 'usual' ? null : menu.find((i) => i.id === st.against) ?? null;
   const outcome = OUTCOMES[st.outcomeId];
-  const detect = detectableEffect(sd ?? 1.5, 0.5, blocks, 7, outcome, overlaps);
+  const detect = detectableEffect(sd ?? 1.5, 0.5, blocks, shape.blockDays, outcome, overlaps);
 
   const option = (i) => h(`button.check${st.pick === i.id ? '.on' : ''}`, { onclick: () => { st.pick = i.id; render(); } },
     h('span.box', {}, st.pick === i.id ? '✓' : ''),
@@ -590,8 +592,8 @@ function setupSheet() {
       h('p.body', {}, `${overlaps === 1 ? 'One trial is already running. Its' : `${overlaps} trials are already running. Their`} on and off weeks will be accounted for, but every trial running at once makes each answer less precise — this one and ${overlaps === 1 ? 'the one' : 'the ones'} already going. A real change becomes easier to miss, and if two things interact that can’t be untangled.`),
       blocks > 10 && h('p.caption', {}, `To make up for some of that, this trial alternates over ${blocks} weeks instead of the usual 10.`)),
     card('sage', h('p.label.sage', {}, 'What this trial can see'),
-      h('p.body', {}, `${blocks} alternating weeks, ${comparator ? 'one then the other' : 'on and off'} in a random order, with 3 quiet days between each — ${total} days in all. ${sd != null ? 'With how much your scores move' : 'For typical day-to-day variation'}, it could reliably detect a change of about ${fmt(detect)} points${outcome.important != null ? `; a change worth caring about is around ${fmt(outcome.important, 0)}` : ''}.${outcome.important != null && detect > outcome.important ? ' A real change smaller than that could be missed — the result will say so if it is.' : ''}`),
-      sd == null && h('p.caption', {}, 'Finish at least 10 baseline days and this becomes a number about you.')),
+      h('p.body', {}, `${blocks} alternating weeks, ${comparator ? 'one then the other' : 'on and off'} in a random order, with ${plural(shape.washoutDays, 'quiet day')} between each — ${total} days in all. ${sd != null ? 'With how much your scores move' : 'For typical day-to-day variation'}, it could reliably detect a change of about ${fmt(detect)} points${outcome.important != null ? `; a change worth caring about is around ${fmt(outcome.important, 0)}` : ''}.${outcome.important != null && detect > outcome.important ? ' A real change smaller than that could be missed — the result will say so if it is.' : ''}`),
+      sd == null && h('p.caption', {}, st.outcomeId === PAIN_ID ? `Finish at least ${BASELINE_MIN_DAYS} baseline days and this becomes a number about you.` : 'Your baseline scores pain only, so this uses typical day-to-day variation for this measure.')),
     start,
   ];
 }
@@ -759,9 +761,10 @@ function play(p) {
 // ── more ─────────────────────────────────────────────────────────────────────────
 
 function crisisLinks() {
+  const line = crisisLine();
   return [
-    h('a.btn.primary', { href: 'tel:988', style: { textDecoration: 'none' } }, 'Call or text 988 (US & Canada)'),
-    h('p.caption', {}, 'UK & Ireland: Samaritans on 116 123. Elsewhere: ', h('a', { href: 'https://findahelpline.com', target: '_blank', rel: 'noopener' }, 'findahelpline.com'), '. In an emergency, call your local emergency number.'),
+    h('a.btn.primary', { href: line.href, style: { textDecoration: 'none' }, ...(line.href.startsWith('http') ? { target: '_blank', rel: 'noopener' } : {}) }, line.label),
+    h('p.caption', {}, 'US & Canada: call or text 988. UK & Ireland: Samaritans on 116 123. Australia: Lifeline on 13 11 14. Elsewhere: ', h('a', { href: 'https://findahelpline.com', target: '_blank', rel: 'noopener' }, 'findahelpline.com'), '. In an emergency, call your local emergency number.'),
   ];
 }
 
@@ -1218,7 +1221,7 @@ async function seedDemo() {
   p.profile.completedOnboarding = true;
   p.baselineStartedOn ??= new Date(Date.now() - 120 * 86400000).toISOString();
   p.trials = p.trials.filter((t) => t.finishedOn);
-  await store.startTrial({ intervention: LIBRARY[4], outcomeId: 'pain.intensity-nrs-11', note: 'Heat pad, 20 minutes each evening' });
+  await store.startTrial({ intervention: LIBRARY[4], outcomeId: PAIN_ID, note: 'Heat pad, 20 minutes each evening' });
   const r = store.running;
   const start = new Date(); start.setDate(start.getDate() - 96); start.setHours(0, 0, 0, 0);
   r.trial.startDate = start.toISOString();

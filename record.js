@@ -8,7 +8,9 @@ import { plannedDays, isComparison } from './engine.js';
 
 const f = (x, p = 1) => (Number.isFinite(x) ? x.toFixed(p) : '—');
 const signed = (x) => (x > 0 ? '+' : x < 0 ? '−' : '') + f(Math.abs(x));
-const dateText = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+// The reader's own date format, as everywhere else in the app.
+let locale;
+const dateText = (d) => new Date(d).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
 const labels = (pairs, ids) => ids.map((id) => pairs.find(([k]) => k === id)?.[1]).filter(Boolean);
 const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 const addDays = (iso, n) => { const d = new Date(iso); d.setDate(d.getDate() + n); return d; };
@@ -82,7 +84,8 @@ export function suggestedQuestions({ profile, trials = [], medications = [] }) {
  * @param {Array}  d.ownQuestions       questions the person added themselves
  * @param {Date}   [d.now]
  */
-export function careRecord({ name, profile, trials = [], medications = [], recent = null, ownQuestions = [], now = new Date() }) {
+export function careRecord({ name, profile, trials = [], medications = [], recent = null, ownQuestions = [], now = new Date(), dateLocale }) {
+  locale = dateLocale;
   const out = [];
   out.push('PAIN RECORD');
   if (name) out.push(`Patient: ${name}`);

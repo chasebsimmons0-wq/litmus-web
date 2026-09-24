@@ -15,3 +15,11 @@ test('leaves ordinary notes alone', () => {
     'Went to the physio', 'Tired but okay',
   ]) assert.equal(mentionsCrisis(t), false, String(t));
 });
+
+test('the first crisis line follows the device region', async () => {
+  const { crisisLine } = await import('../safety.js');
+  assert.equal(crisisLine(['en-US']).href, 'tel:988');
+  assert.equal(crisisLine(['en-GB']).href, 'tel:116123');
+  assert.equal(crisisLine(['fr-CA', 'en']).href, 'tel:988');
+  assert.equal(crisisLine(['de']).href, 'https://findahelpline.com');
+});

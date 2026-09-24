@@ -4,12 +4,17 @@
 // their trials; days indexed from a start date; several readings a day folded into a
 // mean. Nothing leaves the device except through an export the person makes.
 
-import { makeTrial, plannedDays, analyze, blockCountForOverlaps, conditionFor, phaseOnDay } from './engine.js';
+import { makeTrial, plannedDays, analyze, blockCountForOverlaps, conditionFor, phaseOnDay, PAIN_ID, TRIAL_DEFAULTS } from './engine.js';
 import { dayKey } from './tracking.js';
 import { OUTCOME_RECORDS, USUAL_CARE } from './content.js';
 
 const DB_NAME = 'litmus';
-const PAIN = 'pain.intensity-nrs-11';
+const PAIN = PAIN_ID;
+
+/** Baseline days needed before a trial can be sized to the person's own variability. */
+export const BASELINE_MIN_DAYS = 10;
+/** What the baseline screen counts towards: "a week or two" of ordinary days. */
+export const BASELINE_SUGGESTED_DAYS = 14;
 const STORE = 'people';
 const ACTIVE_KEY = 'litmus.active';
 
@@ -184,7 +189,7 @@ export class Store {
   /** Active trials on one of their planned days today. */
   get overlapsForNewTrial() { return this.activeRecords.filter((r) => this.dayIn(r) != null).length; }
 
-  async startTrial({ intervention, comparator = null, outcomeId, note, blockDays = 7, washoutDays = 3 }) {
+  async startTrial({ intervention, comparator = null, outcomeId, note, blockDays = TRIAL_DEFAULTS.blockDays, washoutDays = TRIAL_DEFAULTS.washoutDays }) {
     // Kept below 2^53 so the seed survives a round trip through JSON exactly.
     const seed = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
     const trial = makeTrial({
@@ -251,7 +256,7 @@ export class Store {
 
   get baselineVariability() {
     const s = (this.person?.baseline ?? []).map((e) => e.score);
-    if (s.length < 10) return null;
+    if (s.length < BASELINE_MIN_DAYS) return null;
     const m = s.reduce((x, y) => x + y, 0) / s.length;
     return Math.sqrt(s.reduce((x, y) => x + (y - m) ** 2, 0) / (s.length - 1));
   }
@@ -380,7 +385,7 @@ export class Store {
     const at = (start, day) => { const d = startOfDay(new Date(start)); d.setDate(d.getDate() + day); return dayKey(d); };
     if (p?.baselineStartedOn) for (const e of p.baseline) out[at(p.baselineStartedOn, e.day)] = e.score;
     for (const r of p?.trials ?? []) {
-      if (r.trial.outcomeId !== 'pain.intensity-nrs-11') continue;
+      if (r.trial.outcomeId !== PAIN) continue;
       for (const e of r.entries) out[at(r.trial.startDate, e.day)] = e.score;
     }
     return out;

@@ -20,7 +20,7 @@ test('one daily event with an alert per distinct time, in order', () => {
   assert.equal(ics.match(/BEGIN:VALARM/g).length, 2);
   const starts = [...ics.matchAll(/DTSTART:(\S+)/g)].map((m) => m[1]);
   assert.deepEqual(starts, ['20260924T081500', '20260924T200000'], 'floating local times, earliest first');
-  assert.match(ics, /UID:litmus-daily-2000@litmus\.app/);
+  assert.match(ics, /UID:litmus-daily-2000@example\.org/);
   assert.match(ics, /URL:https:\/\/example\.org\/litmus\//);
 });
 

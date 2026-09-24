@@ -18,7 +18,7 @@ test('the record covers the pain, what was tested, what was tried, medications a
       comparison: { beforeMean: 6.1, beforeDays: 20, afterMean: 5.2, afterDays: 30, difference: -0.9 } }],
     recent: { window: 28, days: 22, flareDays: 3, mean: 5.43 },
     ownQuestions: ['Can I be referred to a pain clinic?'],
-    now: new Date('2026-09-24T12:00:00Z'),
+    now: new Date('2026-09-24T12:00:00Z'), dateLocale: 'en-GB',
   });
   for (const bit of [
     'Patient: Sam', 'Where: Lower back, Hips.', 'For about 6 years.', 'No diagnosis given yet',

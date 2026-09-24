@@ -23,3 +23,26 @@ export function mentionsCrisis(text) {
   const t = normalise(text);
   return t.length > 0 && PHRASES.some((p) => t.includes(p));
 }
+
+// The crisis line to put first, from the device's region. Everyone also sees the
+// others, and findahelpline.com covers every country.
+const LINES = {
+  US: { label: 'Call or text 988', href: 'tel:988' },
+  CA: { label: 'Call or text 988', href: 'tel:988' },
+  GB: { label: 'Call Samaritans on 116 123', href: 'tel:116123' },
+  IE: { label: 'Call Samaritans on 116 123', href: 'tel:116123' },
+  AU: { label: 'Call Lifeline on 13 11 14', href: 'tel:131114' },
+  NZ: { label: 'Call or text 1737', href: 'tel:1737' },
+};
+
+export function regionFrom(languages = []) {
+  for (const tag of languages) {
+    const region = String(tag).split(/[-_]/)[1]?.toUpperCase();
+    if (region && region.length === 2) return region;
+  }
+  return null;
+}
+
+export function crisisLine(languages = globalThis.navigator?.languages ?? []) {
+  return LINES[regionFrom(languages)] ?? { label: 'Find a helpline near you', href: 'https://findahelpline.com' };
+}

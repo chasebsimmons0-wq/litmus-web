@@ -1,7 +1,7 @@
 // Plain-language and clinician text. A port of PainCore/Reporting.swift; the wording
 // is the same so the two apps never describe one result differently.
 
-import { detectableEffect } from './engine.js';
+import { detectableEffect, PAIN_ID, TRIAL_DEFAULTS, trialLength } from './engine.js';
 
 const f = (x, places = 1) => (Number.isFinite(x) ? x.toFixed(places) : '—');
 const pct = (x) => (Number.isFinite(x) ? `${Math.round(x * 100)}%` : '—');
@@ -20,14 +20,13 @@ export function plan(sd, rho, target, outcome, washoutDays = 3, maximumDays = 14
       else if (detectable <= target && total < best.totalDays) best = c;
     }
   }
-  return best ?? { blockCount: 10, blockDays: 7, washoutDays, detectable: Infinity, totalDays: 97 };
+  return best ?? { ...TRIAL_DEFAULTS, washoutDays, detectable: Infinity, totalDays: trialLength({ ...TRIAL_DEFAULTS, washoutDays }) };
 }
 
 function comparisonHeadline(a) {
   const B = a.trial.conditionB.displayName, A = a.trial.conditionA.displayName;
   const magnitude = f(Math.abs(a.effect));
-  const low = f(Math.abs(a.high));
-  const high = f(Math.abs(a.low));
+  const [low, high] = bounds(a);
   const v = a.verdict;
   const lower = a.effect < 0 ? 'lower' : 'higher';
   if (v.kind === 'meaningful') {
@@ -43,8 +42,35 @@ function comparisonHeadline(a) {
   return "This comparison can't answer the question yet. " + explain(a);
 }
 
+// The interval's two ends as sizes, smaller first, whichever way the effect points.
+function bounds(a) {
+  const [x, y] = [Math.abs(a.low), Math.abs(a.high)];
+  return [f(Math.min(x, y)), f(Math.max(x, y))];
+}
+
+// For measures other than pain (sleep, where higher is better; interference), the
+// wording names the measure and takes its direction from the sign of the effect.
+function otherOutcomeHeadline(a) {
+  const name = a.outcome.displayName.toLowerCase();
+  const magnitude = f(Math.abs(a.effect));
+  const [low, high] = bounds(a);
+  const word = a.effect < 0 ? 'lower' : 'higher';
+  const v = a.verdict;
+  if (v.kind === 'meaningful') {
+    return `Your ${name} scores were about ${magnitude} points ${word} while you were doing this. Taking the day-to-day noise into account, the real effect is somewhere between roughly ${low} and ${high} points — so this looks like a genuine ${v.direction === 'improved' ? 'improvement' : 'worsening'}, not chance.`;
+  }
+  if (v.kind === 'probable') {
+    return `Something did change: your ${name} scores were about ${magnitude} points ${word} while you were doing this, and the comparison points the same way throughout. What's less settled is how much — the real effect could be anywhere from ${low} to ${high} points.`;
+  }
+  if (v.kind === 'null') {
+    return `This one doesn't appear to be changing your ${name}. The trial was long enough and your logging complete enough to have picked up a change worth noticing, and it didn't find one. That's a real result — it rules something out.`;
+  }
+  return "This trial can't answer the question. " + explain(a);
+}
+
 export function headline(a) {
   if (a.trial.design === 'alternatingTreatments') return comparisonHeadline(a);
+  if (a.outcome.id && a.outcome.id !== PAIN_ID) return otherOutcomeHeadline(a);
   const magnitude = f(Math.abs(a.effect));
   const low = f(Math.abs(a.high));
   const high = f(Math.abs(a.low));
@@ -102,7 +128,7 @@ export function rerunSuggestion(a) {
       return 'Keep logging — the trial can still finish as planned.';
     case 'underpowered':
       if (!(p.detectable <= a.thresholds.important)) {
-        return "Your scores move enough day to day that no trial of a reasonable length would settle this one. That isn't a failure on your part — it means this question can't be answered by measuring daily pain alone. A different outcome measure, or a bigger intervention, would be the way in.";
+        return `Your scores move enough day to day that no trial of a reasonable length would settle this one. That isn't a failure on your part — it means this question can't be answered by measuring ${a.outcome.displayName.toLowerCase()} alone. A different measure, or a different question to test, would be the way in.`;
       }
       return `Based on how much your scores moved, ${suggested} would give this a fair chance of showing an effect of the size that would matter.`;
     case 'entangledWithOtherTrial':
@@ -156,7 +182,7 @@ function verdictLine(a) {
   return 'Inconclusive — ' + short;
 }
 
-const dateText = (d) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+const dateText = (d) => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
 export function clinicianSummary(a, patientLabel) {
   const trial = a.trial;

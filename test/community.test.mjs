@@ -30,7 +30,7 @@ test('a result card reads without any personal detail', () => {
   const c = cardSummary(result);
   assert.equal(c.title, 'Heat');
   assert.equal(c.verdict, 'Clearly helped');
-  assert.match(c.range, /-2\.4 points \(likely -3\.6 to -1\.2\)/);
+  assert.match(c.range, /Average daily pain: -2\.4 points \(likely -3\.6 to -1\.2\)/);
   assert.match(c.detail, /10 alternating weeks · 64 days logged/);
   const custom = cardSummary({ ...result, trial: { ...result.trial, intervention: { id: 'custom', category: 'other' }, comparator: { id: 'manual.massage' } },
     result: { ...result.result, verdict: 'null' } });

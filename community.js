@@ -12,7 +12,7 @@
 // - No direct messages, no profiles: a pseudonymous handle, nothing else.
 
 import { mentionsCrisis } from './safety.js';
-import { LIBRARY } from './content.js';
+import { LIBRARY, OUTCOME_RECORDS } from './content.js';
 
 export const NOTE_LIMIT = 280;
 const LINK = /(https?:\/\/|www\.|\b[a-z0-9-]+\.(com|net|org|io|co|ca|uk|app|shop|store)\b|@[a-z0-9_]{3,})/i;
@@ -43,7 +43,7 @@ export function handleFor(seed) {
 }
 
 const nameFor = (option) => (option?.id === 'custom' ? 'Something of their own'
-  : LIBRARY.find((i) => i.id === option?.id)?.displayName ?? 'Usual care');
+  : LIBRARY.find((i) => i.id === option?.id)?.displayName ?? 'Another option');
 
 /** The headline of a result card, from an anonymised result alone. */
 export function cardSummary(r) {
@@ -64,8 +64,8 @@ export function cardSummary(r) {
     }[res.verdict];
   }
   const range = res && Number.isFinite(res.low) && Number.isFinite(res.high)
-    ? `${res.effect > 0 ? '+' : ''}${res.effect.toFixed(1)} points (likely ${res.low.toFixed(1)} to ${res.high.toFixed(1)})` : null;
-  const weeks = r.trial.blockCount * (r.trial.blockDays ?? 7) / 7;
+    ? `${(OUTCOME_RECORDS[r.trial.outcome]?.displayName ?? 'Score')}: ${res.effect > 0 ? '+' : ''}${res.effect.toFixed(1)} points (likely ${res.low.toFixed(1)} to ${res.high.toFixed(1)})` : null;
+  const weeks = r.trial.blockCount * r.trial.blockDays / 7;
   return {
     title: A ? `${B} vs ${A}` : B,
     verdict,
