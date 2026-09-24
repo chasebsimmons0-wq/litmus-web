@@ -7,6 +7,7 @@ import {
   suggestedOrder, customIntervention, NERVE_QUALITIES, widespreadFeatureCount, LESSONS, SUPPORT,
 } from './content.js';
 import { careRecord } from './record.js';
+import { ember } from './mascot.js';
 import { headline, rerunSuggestion, describeThreat, clinicianSummary } from './reporting.js';
 import { COMMON_SYMPTOMS, dayKey, keyToDate, beforeAfter, BEFORE_AFTER_MINIMUM_DAYS } from './tracking.js';
 import { reminderCalendar, parseTime } from './reminders.js';
@@ -61,13 +62,20 @@ function presence(size = '') {
     s('path', { d: 'M14 58 Q50 50 86 58', stroke: 'var(--sage)', 'stroke-width': 2.5, fill: 'none', 'stroke-linecap': 'round' }));
 }
 
+// Ember, in whichever pose fits the moment.
+function guide(pose = 'main', size = '') {
+  const el = h(`div.ember${size ? '.' + size : ''}`, { role: 'img', 'aria-label': 'Ember, the Litmus guide' });
+  el.innerHTML = ember(pose, { ground: pose !== 'rest' });
+  return el;
+}
+
 function avatar(person, cls = '') {
   return h(`div.avatar${cls}`, { 'aria-hidden': 'true' }, (person?.name ?? '?').trim().charAt(0).toUpperCase());
 }
 
 function header(title, lead) {
   return h('div.stack.tight', {},
-    h('div.row', {}, presence(), h('div.grow')),
+    h('div.row', {}, guide(), h('div.grow')),
     h('h1.display', {}, title),
     lead && h('p.reading', {}, lead));
 }
@@ -168,7 +176,7 @@ function chooser() {
   const input = h('input.field', { placeholder: 'A name, or just “Me”', autocomplete: 'off', oninput: (e) => { name = e.target.value; } });
   return h('div.stack', {},
     h('div.stack.tight', { style: { marginTop: '28px' } },
-      presence('lg'),
+      guide(people.length ? 'main' : 'welcome', 'lg'),
       h('h1.display.lg', {}, people.length ? 'Who’s here?' : 'Welcome to Litmus'),
       h('p.reading', {}, people.length
         ? 'Each profile keeps its own separate history on this device.'
@@ -275,7 +283,7 @@ function onboarding() {
   return h('div.stack', {},
     h('div.row', {}, ui.step > 0 ? h('button.link', { onclick: () => { ui.step--; render(); } }, '‹ Back') : h('span', { style: { width: '52px' } }),
       h('div.steps', {}, STEPS.map((_, i) => h(`span${i <= ui.step ? '.on' : ''}`)))),
-    ui.step === 0 && presence('lg'),
+    ui.step === 0 && guide('welcome', 'lg'),
     ...body,
     h('button.btn.primary', { onclick: async () => {
       if (!last) { ui.step++; render(); window.scrollTo(0, 0); return; }
@@ -330,7 +338,7 @@ function todayTab() {
   }
 
   const kids = [
-    h('div.row', {}, presence(), h('p.label.sage', {}, active.length === 1 && pools.length
+    h('div.row', {}, guide(flareOn ? 'rest' : (!logged && away != null && away >= 3) ? 'welcome' : 'main'), h('p.label.sage', {}, active.length === 1 && pools.length
       ? `Day ${pools[0].day + 1} of ${plannedDays(pools[0].record.trial)}` : active.length ? 'Today' : 'Baseline')),
     h('h1.display', {}, title),
     lead && h('p.reading', {}, lead),
@@ -589,7 +597,8 @@ function resultBlock(a, record) {
   const worse = a.outcome.lowerIsBetter ? 'Worse' : 'Better';
 
   return h('div.stack', {},
-    h('p.label.sage', {}, trial.conditionB.displayName),
+    h('div.row', {}, guide(a.verdict.kind === 'inconclusive' ? 'think' : 'main'),
+      h('p.label.sage', {}, trial.conditionB.displayName)),
     h('h1.display', {}, title),
     h('p.reading', {}, headline(a)),
     ready && Number.isFinite(a.low) && card('',
