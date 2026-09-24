@@ -17,9 +17,21 @@ account. It is a stopgap, not a second product.
 - Backups through the share sheet to Files or iCloud Drive, with a reminder
 - The result, the likely range, the next step, and a one-page clinician summary
 - Three guided practices, crisis links, and export and restore
+- A daily reminder, added to the phone's calendar as a repeating event with an alert
+- A warm welcome back after a gap, with nothing to catch up on
+- Crisis interception: a note that reads like a crisis brings up where to get help
+- A care record: one page for any clinician covering the pain, everything tested and
+  what it showed, what was tried before, medications, and questions to raise
+- Learn: eight short lessons on how pain works, a flare plan shown on flare days, and
+  routes to human support
+- A private journal, kept out of trials and out of the care record
+- Comparisons: a trial can alternate two options instead of one option and usual care,
+  and the result says which did more, if either
+- Ember, the red panda guide, and matching app icons
 
-It doesn't have HealthKit step counts or reminders. A web app can't read Health, and on
-iOS it can't schedule a notification without a server.
+It doesn't have HealthKit step counts or push notifications. A web app can't read
+Health, and on iOS it can't schedule a notification without a server, which is why the
+reminder lives in the calendar instead.
 
 ## Files
 
@@ -30,36 +42,59 @@ iOS it can't schedule a notification without a server.
 | `tracking.js` | symptoms, medications and the before-and-after comparison, ported from `Tracking.swift` |
 | `content.js` | the intervention library, practices and onboarding options |
 | `store.js` | IndexedDB storage and export/import (`litmus.export.v3`) |
+| `reminders.js` | the calendar (`.ics`) file behind the daily reminder |
+| `safety.js` | the crisis-language check on free text |
+| `record.js` | the care record and its questions for the clinician |
+| `mascot.js` | Ember, drawn as inline SVG |
+| `community.js` | the community's rules and a local backend for the Labs preview |
+| `insight.js` | the anonymised result format (`litmus.result.v1`) for future pooled insight; unused so far |
 | `app.js` | the screens |
 | `sw.js` | offline shell, network first |
 
 No build step and no dependencies.
 
+## Not built yet
+
+Aggregate insight and peer connection need a server. See `docs/server-features.md`.
+The community can already be tried from More → Labs: it runs entirely on the device,
+with the same rules a server would enforce, and no one else can see it.
+
 ## Tests
 
 ```bash
-swift build -c release
-./.build/release/paincheck fixtures pwa/test/fixtures.json
-node pwa/test/engine.test.mjs     # the JS engine matches the Swift engine
-node pwa/test/export.test.mjs     # exports round-trip, and the Swift side can read them
+npm install
+npm test                  # engine, reminders, crisis check, store — no browser needed
+npm run test:browser      # drives the real app in headless Chromium
 ```
 
-`engine.test.mjs` fails on any disagreement with the Swift engine beyond 1e-9. Change
-the Swift engine, regenerate the fixtures, and this test says whether the port needs
-the same change.
+`npm run test:browser` uses Playwright's own Chromium (`npx playwright install chromium`),
+or any Chromium you point `CHROMIUM_PATH` at.
+
+The engine tests here check the statistics behave sensibly on simulated data. Parity with
+the Swift engine — the JS port matching `Sources/PainCore` to within 1e-9 — is tested in
+the native app's repository, against fixtures it generates.
 
 ## Running it
 
 Locally:
 
 ```bash
-python3 -m http.server 8765 --directory pwa
+python3 -m http.server 8765
 ```
 
-To install it on a phone, it has to be served over HTTPS (GitHub Pages, Netlify and
-Cloudflare Pages all work). Open it in Safari, then choose Share → Add to Home Screen.
+To install it on a phone, it has to be served over HTTPS. Every push to `main` runs the
+tests and deploys to GitHub Pages (`.github/workflows/pages.yml`). Turn it on once under
+Settings → Pages → Source: **GitHub Actions**; the site is then at
+`https://<owner>.github.io/litmus-web/`. Open it in Safari, then choose Share → Add to
+Home Screen.
 
 ## Data
+
+Backups use the same `litmus.export.v3` file as the iPhone app. The journal, flare plan
+and appointment questions are extra keys (`journal`, `flarePlan`,
+`appointmentQuestions`) that only the web app reads so far. A comparison trial is written
+with `design: "alternatingTreatments"`; the native app needs that design case before it
+can restore one.
 
 Data lives in IndexedDB for the site's origin, on that device only. An app installed to
 the home screen keeps its data more reliably than a Safari tab, but browsers can still

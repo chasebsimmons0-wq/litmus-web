@@ -12,6 +12,15 @@
 
 // ── Outcome measures ────────────────────────────────────────────────────────────
 
+export const PAIN_ID = 'pain.intensity-nrs-11';
+
+/** The standard trial shape. Everything that describes a trial's length reads these. */
+export const TRIAL_DEFAULTS = { blockCount: 10, blockDays: 7, washoutDays: 3 };
+
+/** Total days for a trial of this shape, washouts included. */
+export const trialLength = ({ blockCount, blockDays, washoutDays } = TRIAL_DEFAULTS) =>
+  blockCount * blockDays + (blockCount - 1) * washoutDays;
+
 export const OUTCOMES = {
   'pain.intensity-nrs-11': {
     id: 'pain.intensity-nrs-11', displayName: 'Average daily pain', unit: 'points',
@@ -320,8 +329,8 @@ export function blockOrder(count, allocation) {
 }
 
 export function makeTrial({
-  intervention, outcomeId = 'pain.intensity-nrs-11', blockCount = 10, blockDays = 7,
-  washoutDays = 3, seed, startDate, note,
+  intervention, comparator = null, outcomeId = PAIN_ID, blockCount = TRIAL_DEFAULTS.blockCount,
+  blockDays = TRIAL_DEFAULTS.blockDays, washoutDays = TRIAL_DEFAULTS.washoutDays, seed, startDate, note,
 }) {
   const allocation = { randomised: true, seed: String(seed), maximumRun: 2 };
   const order = blockOrder(blockCount, allocation);
@@ -337,8 +346,10 @@ export function makeTrial({
   });
   return {
     id: crypto.randomUUID(),
-    design: 'withdrawalABAB',
-    conditionA: { id: 'control.usual-care', displayName: 'Usual care (no added intervention)' },
+    // With a comparator, A is a second active option rather than usual care. The
+    // analysis is the same contrast either way; only what A means changes.
+    design: comparator ? 'alternatingTreatments' : 'withdrawalABAB',
+    conditionA: comparator ?? { id: 'control.usual-care', displayName: 'Usual care (no added intervention)' },
     conditionB: intervention,
     outcomeId,
     phases,
@@ -346,6 +357,16 @@ export function makeTrial({
     allocation,
     userNote: note || null,
   };
+}
+
+/** A trial comparing two active options, rather than one option against usual care. */
+export const isComparison = (trial) => trial.design === 'alternatingTreatments';
+
+/** What the person does in a block of this kind, or null for usual care and washouts. */
+export function conditionFor(trial, kind) {
+  if (kind === 'b') return trial.conditionB;
+  if (kind === 'a' && isComparison(trial)) return trial.conditionA;
+  return null;
 }
 
 export const plannedDays = (trial) =>
@@ -697,7 +718,7 @@ function blockMeanVariance(sd, rho, days) {
   return sd * sd / (days * days) * (days + 2 * weighted);
 }
 
-export function detectableEffect(sd, rho, blockCount, blockDays, outcome = OUTCOMES['pain.intensity-nrs-11'], overlapCount = 0) {
+export function detectableEffect(sd, rho, blockCount, blockDays, outcome = OUTCOMES[PAIN_ID], overlapCount = 0) {
   const pairs = Math.trunc(blockCount / 2);
   const df = pairs - 1 - overlapCount;
   if (pairs < 2 || !(df >= 2 || (overlapCount === 0 && df >= 1)) || !(sd > 0)) return Infinity;

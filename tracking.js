@@ -5,8 +5,10 @@
 // described for what it is.
 
 export const COMMON_SYMPTOMS = [
-  'Fatigue', 'Sleep quality', 'Mood', 'Anxiety', 'Brain fog', 'Stiffness',
-  'Headache', 'Nausea', 'Dizziness', 'Drowsiness', 'Stomach upset', 'Appetite',
+  // Every one reads the same way as the scale: 0 is none, 10 is severe. "Sleep
+  // quality" and "Mood" were flipped to the problem they describe for that reason.
+  'Fatigue', 'Poor sleep', 'Low mood', 'Anxiety', 'Brain fog', 'Stiffness',
+  'Headache', 'Nausea', 'Dizziness', 'Drowsiness', 'Stomach upset', 'Appetite changes',
 ];
 
 // Calendar days as YYYY-MM-DD, in the person's own time zone. Arithmetic is done on

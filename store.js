@@ -4,12 +4,17 @@
 // their trials; days indexed from a start date; several readings a day folded into a
 // mean. Nothing leaves the device except through an export the person makes.
 
-import { makeTrial, plannedDays, analyze, blockCountForOverlaps } from './engine.js';
+import { makeTrial, plannedDays, analyze, blockCountForOverlaps, conditionFor, phaseOnDay, PAIN_ID, TRIAL_DEFAULTS } from './engine.js';
 import { dayKey } from './tracking.js';
 import { OUTCOME_RECORDS, USUAL_CARE } from './content.js';
 
 const DB_NAME = 'litmus';
-const PAIN = 'pain.intensity-nrs-11';
+const PAIN = PAIN_ID;
+
+/** Baseline days needed before a trial can be sized to the person's own variability. */
+export const BASELINE_MIN_DAYS = 10;
+/** What the baseline screen counts towards: "a week or two" of ordinary days. */
+export const BASELINE_SUGGESTED_DAYS = 14;
 const STORE = 'people';
 const ACTIVE_KEY = 'litmus.active';
 
@@ -49,6 +54,8 @@ export const isoDate = (d) => new Date(d).toISOString().replace(/\.\d{3}Z$/, 'Z'
 
 export const emptyProfile = () => ({
   sites: [], qualities: [], diagnosesGiven: [], alreadyTried: [], factors: [], redFlags: [],
+  // In the person's own words, for the care record only. Never part of an anonymised result.
+  alsoTried: [], ruledOut: [],
   yearsWithPain: null, completedOnboarding: false, baselineStartedOn: null,
 });
 
@@ -101,6 +108,7 @@ export class Store {
       id: crypto.randomUUID(), name: chosen, createdAt: now, updatedAt: now,
       profile: emptyProfile(), baselineStartedOn: null, baseline: [], trials: [],
       symptoms: [], symptomScores: {}, medications: [], lastBackupAt: null,
+      journal: [], flarePlan: {}, questions: [],
     };
     this.people.push(person);
     this.use(person, false);
@@ -137,12 +145,28 @@ export class Store {
     p.symptoms = [];
     p.symptomScores = {};
     p.medications = [];
+    p.journal = [];
+    p.flarePlan = {};
+    p.questions = [];
     await this.save();
   }
 
   // Profile
 
   get profile() { return this.person?.profile ?? emptyProfile(); }
+
+  /** Adds to one of the person's own lists in the profile (alsoTried, ruledOut). */
+  async addProfileItem(field, text) {
+    const t = text.trim();
+    if (!t) return;
+    (this.person.profile[field] ??= []).push(t);
+    await this.save();
+  }
+
+  async removeProfileItem(field, index) {
+    this.person.profile[field]?.splice(index, 1);
+    await this.save();
+  }
 
   async saveProfile(profile) {
     const p = this.person;
@@ -180,14 +204,14 @@ export class Store {
   /** Active trials on one of their planned days today. */
   get overlapsForNewTrial() { return this.activeRecords.filter((r) => this.dayIn(r) != null).length; }
 
-  async startTrial({ intervention, outcomeId, note, blockDays = 7, washoutDays = 3 }) {
+  async startTrial({ intervention, comparator = null, outcomeId, note, blockDays = TRIAL_DEFAULTS.blockDays, washoutDays = TRIAL_DEFAULTS.washoutDays }) {
     // Kept below 2^53 so the seed survives a round trip through JSON exactly.
     const seed = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
     const trial = makeTrial({
-      intervention, outcomeId, blockCount: blockCountForOverlaps(this.overlapsForNewTrial), blockDays, washoutDays, seed,
+      intervention, comparator, outcomeId, blockCount: blockCountForOverlaps(this.overlapsForNewTrial), blockDays, washoutDays, seed,
       startDate: isoDate(startOfDay()), note,
     });
-    trial.conditionA = USUAL_CARE;
+    if (!comparator) trial.conditionA = USUAL_CARE;
     // Swift writes UUIDs in capitals; matching that keeps ids stable across a round trip.
     trial.id = trial.id.toUpperCase();
     this.person.trials.push({ id: trial.id, trial, entries: [], finishedOn: null });
@@ -199,6 +223,8 @@ export class Store {
     const r = this.running;
     if (!r) return;
     r.finishedOn = isoDate(new Date());
+    // Kept so a trial stopped early is never mistaken for one that ran its course.
+    r.endedEarly = !this.focusedIsFinished;
     this.focusedId = null;
     await this.save();
   }
@@ -223,9 +249,11 @@ export class Store {
   }
 
   /** Every other trial, positioned against this one; the engine keeps the overlaps. */
-  concurrentWith(trial) {
+  concurrentWith(trial, finishedOn = null) {
     return (this.person?.trials ?? [])
       .filter((r) => r.trial.id !== trial.id)
+      // A trial that started after this one ended can't have overlapped it.
+      .filter((r) => !finishedOn || daysBetween(finishedOn, new Date(r.trial.startDate)) <= 0)
       .map((r) => ({
         trial: r.trial,
         dayOffset: daysBetween(r.trial.startDate, new Date(trial.startDate)),
@@ -235,7 +263,7 @@ export class Store {
 
   analysis(record = this.running) {
     if (!record) return null;
-    return analyze(record.trial, record.entries, this.concurrentWith(record.trial));
+    return analyze(record.trial, record.entries, this.concurrentWith(record.trial, record.finishedOn));
   }
 
   // Baseline
@@ -247,7 +275,7 @@ export class Store {
 
   get baselineVariability() {
     const s = (this.person?.baseline ?? []).map((e) => e.score);
-    if (s.length < 10) return null;
+    if (s.length < BASELINE_MIN_DAYS) return null;
     const m = s.reduce((x, y) => x + y, 0) / s.length;
     return Math.sqrt(s.reduce((x, y) => x + (y - m) ** 2, 0) / (s.length - 1));
   }
@@ -325,8 +353,7 @@ export class Store {
 
   /** Active trials on an "on" day today: each asks, separately, whether it was done. */
   get trialsAskingAdherence() {
-    return this.todaysPools().filter((p) => p.record && p.record.trial.phases
-      .some((ph) => ph.kind === 'b' && p.day >= ph.startDay && p.day < ph.startDay + ph.length));
+    return this.todaysPools().filter((p) => p.record && conditionFor(p.record.trial, phaseOnDay(p.record.trial, p.day)?.kind));
   }
 
   async setAdherence(trialId, done) {
@@ -377,10 +404,78 @@ export class Store {
     const at = (start, day) => { const d = startOfDay(new Date(start)); d.setDate(d.getDate() + day); return dayKey(d); };
     if (p?.baselineStartedOn) for (const e of p.baseline) out[at(p.baselineStartedOn, e.day)] = e.score;
     for (const r of p?.trials ?? []) {
-      if (r.trial.outcomeId !== 'pain.intensity-nrs-11') continue;
+      if (r.trial.outcomeId !== PAIN) continue;
       for (const e of r.entries) out[at(r.trial.startDate, e.day)] = e.score;
     }
     return out;
+  }
+
+  /** Whole days since anything was last scored, or null if nothing ever has been. */
+  get daysSinceLastLog() {
+    const p = this.person;
+    const at = (start, day) => { const d = startOfDay(new Date(start)); d.setDate(d.getDate() + day); return d; };
+    let last = null;
+    const see = (start, entries) => {
+      for (const e of entries) { const d = at(start, e.day); if (!last || d > last) last = d; }
+    };
+    if (p?.baselineStartedOn) see(p.baselineStartedOn, p.baseline);
+    for (const r of p?.trials ?? []) see(r.trial.startDate, r.entries);
+    return last ? daysBetween(last) : null;
+  }
+
+  /** Pain over the last `window` days: mean, days logged and flare days. */
+  recentPain(window = 28) {
+    const p = this.person;
+    const cutoff = startOfDay(); cutoff.setDate(cutoff.getDate() - (window - 1));
+    const byDay = new Map();
+    const at = (start, day) => { const d = startOfDay(new Date(start)); d.setDate(d.getDate() + day); return d; };
+    const see = (start, entries) => {
+      for (const e of entries) { const d = at(start, e.day); if (d >= cutoff) byDay.set(dayKey(d), e); }
+    };
+    if (p?.baselineStartedOn) see(p.baselineStartedOn, p.baseline);
+    for (const r of p?.trials ?? []) if (r.trial.outcomeId === PAIN) see(r.trial.startDate, r.entries);
+    const days = [...byDay.values()];
+    return {
+      window, days: days.length, flareDays: days.filter((e) => e.isFlare).length,
+      mean: days.length ? days.reduce((x, e) => x + e.score, 0) / days.length : null,
+    };
+  }
+
+  // Journal, flare plan and appointment questions — the person's own words
+
+  get journal() { return (this.person?.journal ?? []).slice().sort((a, b) => b.date.localeCompare(a.date)); }
+
+  async addJournalEntry(text) {
+    const t = text.trim();
+    if (!t) return;
+    this.person.journal.push({ id: crypto.randomUUID().toUpperCase(), date: isoDate(new Date()), text: t });
+    await this.save();
+  }
+
+  async deleteJournalEntry(id) {
+    this.person.journal = this.person.journal.filter((x) => x.id !== id);
+    await this.save();
+  }
+
+  get flarePlan() { return this.person?.flarePlan ?? {}; }
+
+  async setFlarePlan(field, text) {
+    this.person.flarePlan = { ...this.person.flarePlan, [field]: text.trim() || undefined };
+    await this.save();
+  }
+
+  get questions() { return this.person?.questions ?? []; }
+
+  async addQuestion(text) {
+    const t = text.trim();
+    if (!t) return;
+    this.person.questions.push({ id: crypto.randomUUID().toUpperCase(), text: t });
+    await this.save();
+  }
+
+  async removeQuestion(id) {
+    this.person.questions = this.person.questions.filter((x) => x.id !== id);
+    await this.save();
   }
 
   // Medications — tracked, never tested
@@ -433,6 +528,8 @@ export class Store {
     const p = this.person;
     const plainEntry = (e) => {
       const out = { day: e.day, score: e.score, isFlare: !!e.isFlare };
+      // Kept so a restored day's average still takes further readings correctly.
+      if (e.sampleCount > 1) { out.sampleCount = e.sampleCount; out.sampleSum = e.sampleSum; }
       if (e.adhered != null) out.adhered = e.adhered;
       if (e.note) out.note = e.note;
       return out;
@@ -448,6 +545,7 @@ export class Store {
       baseline: p.baseline.map(plainEntry),
       completedTrials: this.completed.map((r) => ({
         trial: toNativeTrial(r.trial, 'completed'), entries: r.entries.map(plainEntry), finishedOn: r.finishedOn,
+        ...(r.endedEarly != null ? { endedEarly: r.endedEarly } : {}),
       })),
       activeTrials: this.activeRecords.map((r) => ({ trial: toNativeTrial(r.trial, 'running'), entries: r.entries.map(plainEntry) })),
       // Version 2 readers only know one running trial.
@@ -465,6 +563,10 @@ export class Store {
         for (const k of ['dose', 'stoppedOn', 'note']) if (m[k]) row[k] = m[k];
         return row;
       }),
+      // Web-only so far. Readers that don't know these keys ignore them.
+      journal: p.journal,
+      flarePlan: p.flarePlan,
+      appointmentQuestions: p.questions,
     };
     if (this.activeRecords[0]) root.currentTrial = toNativeTrial(this.activeRecords[0].trial, 'running');
     // Seeds are 64-bit. They travel as strings inside JavaScript and are written back
@@ -482,11 +584,14 @@ export class Store {
     }
     // Everything is read before anything is written, so a file that fails halfway
     // leaves no half-restored person behind.
-    const readEntry = (e) => entry(e.day, e.score, { adhered: e.adhered ?? null, isFlare: !!e.isFlare, note: e.note ?? null });
+    const readEntry = (e) => entry(e.day, e.score, {
+      adhered: e.adhered ?? null, isFlare: !!e.isFlare, note: e.note ?? null,
+      ...(e.sampleCount > 1 && Number.isFinite(e.sampleSum) ? { sampleCount: e.sampleCount, sampleSum: e.sampleSum } : {}),
+    });
     const trials = [];
     for (const c of data.completedTrials ?? []) {
       const trial = fromNativeTrial(c.trial);
-      trials.push({ id: trial.id, trial, entries: c.entries.map(readEntry), finishedOn: c.finishedOn });
+      trials.push({ id: trial.id, trial, entries: c.entries.map(readEntry), finishedOn: c.finishedOn, endedEarly: c.endedEarly ?? null });
     }
     if (Array.isArray(data.activeTrials)) {
       for (const a of data.activeTrials) {
@@ -518,6 +623,9 @@ export class Store {
     person.symptoms = symptoms;
     person.symptomScores = symptomScores;
     person.medications = medications;
+    person.journal = Array.isArray(data.journal) ? data.journal.filter((x) => x?.text && x?.date) : [];
+    person.flarePlan = data.flarePlan && typeof data.flarePlan === 'object' ? data.flarePlan : {};
+    person.questions = Array.isArray(data.appointmentQuestions) ? data.appointmentQuestions.filter((x) => x?.text) : [];
     await this.save(person);
     return person.name;
   }
@@ -529,6 +637,9 @@ function upgrade(p) {
   p.symptomScores ??= {};
   p.medications ??= [];
   p.lastBackupAt ??= null;
+  p.journal ??= [];
+  p.flarePlan ??= {};
+  p.questions ??= [];
   return p;
 }
 

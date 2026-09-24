@@ -1,13 +1,19 @@
 // Litmus — web. The screens, built on the same engine as the native app.
 
-import { OUTCOMES, detectableEffect, plannedDays, phaseOnDay, blockCountForOverlaps } from './engine.js';
-import { Store, daysBetween } from './store.js';
+import { OUTCOMES, detectableEffect, plannedDays, phaseOnDay, blockCountForOverlaps, isComparison, conditionFor, PAIN_ID, TRIAL_DEFAULTS, trialLength } from './engine.js';
+import { Store, daysBetween, BASELINE_MIN_DAYS, BASELINE_SUGGESTED_DAYS } from './store.js';
 import {
   SITES, QUALITIES, FACTORS, RED_FLAGS, DIAGNOSES, LIBRARY, PRACTICES, PAIN_RAMP,
-  suggestedOrder, customIntervention, NERVE_QUALITIES, widespreadFeatureCount,
+  suggestedOrder, customIntervention, NERVE_QUALITIES, widespreadFeatureCount, LESSONS, SUPPORT,
 } from './content.js';
-import { headline, rerunSuggestion, describeThreat, clinicianSummary } from './reporting.js';
+import { careRecord, shortVerdict } from './record.js';
+import { ember } from './mascot.js';
+import { anonymisedResult } from './insight.js';
+import { LocalCommunity, cardSummary, NOTE_LIMIT } from './community.js';
+import { headline, rerunSuggestion, describeThreat, clinicianSummary, plan } from './reporting.js';
 import { COMMON_SYMPTOMS, dayKey, keyToDate, beforeAfter, BEFORE_AFTER_MINIMUM_DAYS } from './tracking.js';
+import { reminderCalendar, parseTime } from './reminders.js';
+import { mentionsCrisis, crisisLine } from './safety.js';
 
 const store = new Store();
 const ui = { tab: 'today', sheet: null, step: 0, draft: null, practice: null };
@@ -58,16 +64,26 @@ function presence(size = '') {
     s('path', { d: 'M14 58 Q50 50 86 58', stroke: 'var(--sage)', 'stroke-width': 2.5, fill: 'none', 'stroke-linecap': 'round' }));
 }
 
+// Ember, in whichever pose fits the moment.
+function guide(pose = 'main', size = '') {
+  const el = h(`div.ember${size ? '.' + size : ''}`, { role: 'img', 'aria-label': 'Ember, the Litmus guide' });
+  el.innerHTML = ember(pose, { ground: pose !== 'rest' });
+  return el;
+}
+
 function avatar(person, cls = '') {
   return h(`div.avatar${cls}`, { 'aria-hidden': 'true' }, (person?.name ?? '?').trim().charAt(0).toUpperCase());
 }
 
 function header(title, lead) {
   return h('div.stack.tight', {},
-    h('div.row', {}, presence(), h('div.grow')),
+    h('div.row', {}, guide(), h('div.grow')),
     h('h1.display', {}, title),
     lead && h('p.reading', {}, lead));
 }
+
+/** A trial's name: the option, or both options when it's a comparison. */
+const trialName = (t) => (isComparison(t) ? `${t.conditionB.displayName} vs ${t.conditionA.displayName}` : t.conditionB.displayName);
 
 function card(kind, ...kids) { return h(`section.card${kind ? '.' + kind : ''}`, {}, ...kids); }
 
@@ -152,7 +168,7 @@ function trace(entries, trial, { today } = {}) {
 function traceLegend(trial) {
   return h('div.legend', {},
     trial && h('span', {}, h('i.swatch', { style: { background: 'var(--band-on)' } }), trial.conditionB.displayName),
-    trial && h('span', {}, h('i.swatch', { style: { background: 'var(--band-off)' } }), 'Off'),
+    trial && h('span', {}, h('i.swatch', { style: { background: 'var(--band-off)' } }), isComparison(trial) ? trial.conditionA.displayName : 'Off'),
     trial && h('span', {}, h('i.swatch', { style: { background: 'var(--band-wash)' } }), 'Between'),
     h('span.row', { style: { gap: '5px' } }, h('i.dot'), 'Flare'));
 }
@@ -165,7 +181,7 @@ function chooser() {
   const input = h('input.field', { placeholder: 'A name, or just “Me”', autocomplete: 'off', oninput: (e) => { name = e.target.value; } });
   return h('div.stack', {},
     h('div.stack.tight', { style: { marginTop: '28px' } },
-      presence('lg'),
+      guide(people.length ? 'main' : 'welcome', 'lg'),
       h('h1.display.lg', {}, people.length ? 'Who’s here?' : 'Welcome to Litmus'),
       h('p.reading', {}, people.length
         ? 'Each profile keeps its own separate history on this device.'
@@ -199,6 +215,8 @@ function restoreButton() {
 const STEPS = ['welcome', 'sites', 'qualities', 'history', 'factors', 'safety', 'picture'];
 
 function onboarding() {
+  // A draft belongs to one person: switching profile mid-onboarding starts theirs afresh.
+  if (ui.draftFor !== store.person.id) { ui.draft = null; ui.step = 0; ui.draftFor = store.person.id; }
   ui.draft ??= structuredClone(store.profile);
   const d = ui.draft;
   const step = STEPS[ui.step];
@@ -262,7 +280,7 @@ function onboarding() {
       body = [h('h1.display.md', {}, 'Here’s the picture so far'),
         card('', h('p.label', {}, 'How pain works'),
           h('p.body', {}, 'All pain is produced by the nervous system as a protective output — real, and not “in your head”. When pain lasts, the system can become more sensitive, so the amount of pain stops tracking the amount of damage. That’s why sleep, stress and activity move it, and why things that calm the system can help.')),
-        wide >= 2 && card('sage', h('p.body', {}, 'Some of what you described — pain in several places, sleep, fatigue, sensitivity — is often discussed as the nervous system turning up its volume. That’s not a diagnosis. It’s one reason sleep and pacing sit near the top of the list of things you could test.')),
+        wide >= 2 && card('sage', h('p.body', {}, 'Some of what you described — pain in several places, sleep, fatigue, sensitivity — is often discussed as the nervous system turning up its volume. That’s not a diagnosis, and only a clinician can say what’s going on for you. Sleep and pacing are among the things on the list you could test, if you want to.')),
         card('', h('p.label', {}, 'What happens next'),
           h('p.body', {}, 'For the next week or two, just score your pain once a day. That shows how much it moves on its own, which is what a fair test has to be measured against. Then you can choose one thing to test.'))];
     }
@@ -272,7 +290,7 @@ function onboarding() {
   return h('div.stack', {},
     h('div.row', {}, ui.step > 0 ? h('button.link', { onclick: () => { ui.step--; render(); } }, '‹ Back') : h('span', { style: { width: '52px' } }),
       h('div.steps', {}, STEPS.map((_, i) => h(`span${i <= ui.step ? '.on' : ''}`)))),
-    ui.step === 0 && presence('lg'),
+    ui.step === 0 && guide('welcome', 'lg'),
     ...body,
     h('button.btn.primary', { onclick: async () => {
       if (!last) { ui.step++; render(); window.scrollTo(0, 0); return; }
@@ -310,16 +328,27 @@ function todayTab() {
   } else if (pools.length === 1) {
     const { record, day } = pools[0];
     const kind = phaseOnDay(record.trial, day).kind;
+    const doing = conditionFor(record.trial, kind);
+    const weekly = phaseOnDay(record.trial, day)?.length === 7;
     title = kind === 'washout' ? 'A quiet day between blocks.'
-      : kind === 'b' ? `A week on ${record.trial.conditionB.displayName}.` : 'An off week.';
-    lead = kind === 'washout' ? 'Carry on as you were.'
-      : kind === 'b' ? (record.trial.userNote || 'Do the thing you’re testing, as planned.') : 'Nothing to do differently.';
+      : doing ? `${weekly ? 'A week' : 'A block'} on ${doing.displayName}.` : `An off ${weekly ? 'week' : 'block'}.`;
+    lead = kind === 'washout' ? (isComparison(record.trial) ? 'Neither one today. Carry on as you were.' : 'Carry on as you were.')
+      : kind === 'b' ? (record.trial.userNote || 'Do the thing you’re testing, as planned.')
+      : doing ? `Do ${doing.displayName.toLowerCase()} this week, not ${record.trial.conditionB.displayName.toLowerCase()}.` : 'Nothing to do differently.';
   } else {
     title = `${pools.length} trials running`;
   }
 
+  // Back after a gap: a warm word and nothing to catch up on. Never a count of what
+  // was missed.
+  const away = store.daysSinceLastLog;
+  if (!logged && away != null && away >= 3) {
+    title = 'Good to see you.';
+    lead = 'The days in between are simply left out — there’s nothing to catch up on. Just today’s number, whenever you’re ready.';
+  }
+
   const kids = [
-    h('div.row', {}, presence(), h('p.label.sage', {}, active.length === 1 && pools.length
+    h('div.row', {}, guide(flareOn ? 'rest' : (!logged && away != null && away >= 3) ? 'welcome' : 'main'), h('p.label.sage', {}, active.length === 1 && pools.length
       ? `Day ${pools[0].day + 1} of ${plannedDays(pools[0].record.trial)}` : active.length ? 'Today' : 'Baseline')),
     h('h1.display', {}, title),
     lead && h('p.reading', {}, lead),
@@ -329,37 +358,48 @@ function todayTab() {
   if (pools.length > 1) {
     kids.push(card('', pools.map(({ record, day }) => {
       const kind = phaseOnDay(record.trial, day).kind;
-      const what = kind === 'b' ? 'On' : kind === 'a' ? 'Off' : 'Between blocks';
-      return h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, record.trial.conditionB.displayName),
+      const what = conditionFor(record.trial, kind)?.displayName ?? (kind === 'a' ? 'Off' : 'Between blocks');
+      return h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, trialName(record.trial)),
         h('span.caption', {}, `${what} · day ${day + 1} of ${plannedDays(record.trial)}`));
     })));
   }
 
-  outcomes.forEach((outcomeId, index) => kids.push(outcomeSection(outcomeId, index === 0, outcomes.length > 1)));
+  // Flare mode: a bad day asks for the number and nothing else. The rest waits behind
+  // one optional link.
+  const minimal = flareOn && !ui.flareMore;
+  if (flareOn) {
+    kids[1] = h('h1.display', {}, 'A hard day.');
+    kids[2] = h('p.reading', {}, logged ? 'That’s all Litmus needs today. Everything else can wait.' : 'Just the number, whenever you can. Everything else can wait.');
+  }
+  outcomes.forEach((outcomeId, index) => kids.push(outcomeSection(outcomeId, index === 0, outcomes.length > 1, minimal)));
 
   if (outcomes.length) {
     kids.push(flareToggle(flareOn, async (on) => {
       if (logged) await store.setFlare(on);
       else { ui.pendingFlare = on; render(); }
     }));
+    if (flareOn) kids.push(flarePlanCard());
   }
 
-  if (logged) {
+  if (logged && minimal) {
+    kids.push(h('button.link', { onclick: () => { ui.flareMore = true; render(); } }, 'Add more for today (optional)'));
+  } else if (logged) {
     // One question per trial on an "on" day. Named, rather than slotted into a
     // sentence: "did you do your heat" reads badly, and custom names can be anything.
     for (const pool of store.trialsAskingAdherence) {
       const trial = pool.record.trial;
+      const doing = conditionFor(trial, phaseOnDay(trial, pool.day)?.kind);
       const answer = pool.list.find((e) => e.day === pool.day)?.adhered;
       kids.push(card('', h('p.label', {}, 'Did you do it today?'),
-        h('p.body', { style: { color: 'var(--ink)' } }, trial.conditionB.displayName),
-        trial.userNote && h('p.caption', {}, `Your plan: ${trial.userNote}`),
+        h('p.body', { style: { color: 'var(--ink)' } }, doing.displayName),
+        doing === trial.conditionB && trial.userNote && h('p.caption', {}, `Your plan: ${trial.userNote}`),
         h('div.row', {},
           h(`button.btn.outline${answer === true ? '.solid-on' : ''}`, { onclick: () => store.setAdherence(pool.record.id, true) }, 'Yes'),
           h(`button.btn.outline${answer === false ? '.solid-on' : ''}`, { onclick: () => store.setAdherence(pool.record.id, false) }, 'Not today')),
         h('p.caption', {}, 'An honest “not today” keeps the result accurate.')));
     }
     const note = h('textarea.field', { placeholder: 'A note for today (optional)', rows: 2 }, store.today?.note ?? '');
-    note.addEventListener('change', () => store.setNote(note.value));
+    note.addEventListener('change', () => { checkForCrisis(note.value); store.setNote(note.value); });
     kids.push(note);
     kids.push(symptomCheckIn());
   }
@@ -369,7 +409,7 @@ function todayTab() {
 }
 
 // One measure's question, or what was logged for it and a way to add to it.
-function outcomeSection(outcomeId, prominent, named = false) {
+function outcomeSection(outcomeId, prominent, named = false, minimal = false) {
   const outcome = OUTCOMES[outcomeId];
   const today = store.todayFor(outcomeId);
   const log = async (v) => {
@@ -400,10 +440,10 @@ function outcomeSection(outcomeId, prominent, named = false) {
     h('div.row.between', {}, h('p.label', {}, named ? outcome.displayName : 'Logged today'),
       h('button.link', { style: { padding: 0 }, onclick: () => store.clearToday(outcomeId) }, 'Change')),
     h('div.row', { style: { alignItems: 'baseline' } }, h('span.number', {}, fmt(today.score, today.sampleCount > 1 ? 1 : 0)), h('span.muted', {}, 'out of 10')),
-    h('p.caption', {}, today.sampleCount > 1
+    !minimal && h('p.caption', {}, today.sampleCount > 1
       ? `Average of ${plural(today.sampleCount, 'reading')} today.`
       : 'One reading so far. It moves through the day — add more whenever you like, and the day’s score becomes their average.'),
-    more);
+    !minimal && more);
 }
 
 // Optional scores for whatever else someone chose to watch.
@@ -441,18 +481,20 @@ function trialTab() {
   const day = store.currentDay;
   const logged = store.entries.length;
   const elapsed = store.elapsedDays;
-  const missed = Math.max(0, elapsed - logged - (store.today ? 0 : day != null ? 1 : 0));
+  const loggedToday = day != null && store.entries.some((e) => e.day === day);
+  const missed = Math.max(0, elapsed - logged - (loggedToday || day == null ? 0 : 1));
   const blocks = trial.phases.filter((p) => p.kind !== 'washout');
   const doneBlocks = blocks.filter((p) => p.startDay + p.length <= (day ?? plannedDays(trial))).length;
 
   return h('div.stack', {},
     trialSwitcher(),
-    header(trial.conditionB.displayName, `Testing its effect on ${OUTCOMES[trial.outcomeId].displayName.toLowerCase()}.`),
+    header(isComparison(trial) ? `${trial.conditionB.displayName} or ${trial.conditionA.displayName.toLowerCase()}?` : trial.conditionB.displayName,
+      isComparison(trial) ? `Comparing their effect on ${OUTCOMES[trial.outcomeId].displayName.toLowerCase()}.` : `Testing its effect on ${OUTCOMES[trial.outcomeId].displayName.toLowerCase()}.`),
     card('', h('div.row.between', {},
         h('div', {}, h('div.number', {}, elapsed), h('p.caption', {}, `of ${plannedDays(trial)} days`)),
         h('div', {}, h('div.number', {}, logged), h('p.caption', {}, 'logged')),
-        h('div', {}, h('div.number', {}, `${doneBlocks}/${blocks.length}`), h('p.caption', {}, 'weeks done'))),
-      missed > 0 && h('p.caption', {}, `${plural(missed, 'day')} missed so far — that’s normal and already accounted for.`)),
+        h('div', {}, h('div.number', {}, `${doneBlocks}/${blocks.length}`), h('p.caption', {}, blocks[0]?.length === 7 ? 'weeks done' : 'blocks done'))),
+      missed > 0 && h('p.caption', {}, 'Some days have been missed — that’s normal and already accounted for.')),
     card('', h('p.label', {}, 'Your scores'), trace(store.entries, trial, { today: day }), traceLegend(trial)),
     card('', h('p.label', {}, 'The order'),
       h('div', { style: { display: 'grid', gridTemplateColumns: `repeat(${blocks.length}, minmax(0, 1fr))`, gap: '4px' } }, blocks.map((p) => {
@@ -462,8 +504,9 @@ function trialTab() {
           height: '30px', borderRadius: '8px', display: 'grid', placeItems: 'center', fontSize: '11px', color: 'var(--ink-soft)',
           background: p.kind === 'b' ? 'var(--band-on)' : 'var(--band-off)',
           outline: now ? '2px solid var(--ink)' : 'none', opacity: past || now ? 1 : 0.55,
-        } }, p.kind === 'b' ? 'On' : 'Off');
+        } }, isComparison(trial) ? (p.kind === 'b' ? 'B' : 'A') : p.kind === 'b' ? 'On' : 'Off');
       })),
+      isComparison(trial) && h('p.caption', {}, `B is ${trial.conditionB.displayName.toLowerCase()}, A is ${trial.conditionA.displayName.toLowerCase()}.`),
       h('p.caption', {}, 'Randomised, so a good or bad stretch can’t line up with the thing being tested.')),
     a && a.verdict.reason !== 'insufficientData' && a.verdict.reason !== 'tooFewCompletedBlocks' && Number.isFinite(a.low) && card('sage',
       h('p.label.sage', {}, 'Precision so far'),
@@ -482,17 +525,17 @@ function trialSwitcher() {
     active.map((r) => h(`button.chip${r.id === store.running.id ? '.on' : ''}`, {
       role: 'tab', 'aria-selected': String(r.id === store.running.id), style: { whiteSpace: 'nowrap' },
       onclick: () => store.focus(r.id),
-    }, r.trial.conditionB.displayName)));
+    }, trialName(r.trial))));
 }
 
 function baselineStatus() {
   const base = store.person.baseline;
   const sd = store.baselineVariability;
-  const target = 21;
+  const target = BASELINE_SUGGESTED_DAYS;
   return h('div.stack', {},
     store.completed.length > 0
       ? header('Ready for the next one', 'Your daily scores carry on from here. Choose something new to test whenever you like.')
-      : header('Your baseline', 'Before testing anything, a couple of weeks of ordinary days shows how much your pain moves by itself.'),
+      : header('Your baseline', 'Before testing anything, a week or two of ordinary days shows how much your pain moves by itself.'),
     card('', h('div.row', { style: { alignItems: 'baseline' } }, h('span.number', {}, base.length), h('span.muted', {}, `of ${target} days scored`)),
       h('div.row', { style: { gap: '4px', flexWrap: 'wrap' } }, Array.from({ length: Math.max(target, base.length) }, (_, d) => {
         const e = base.find((x) => x.day === d);
@@ -502,8 +545,8 @@ function baselineStatus() {
     base.length >= 3 && card('', h('p.label', {}, 'So far'), trace(base, null), traceLegend(null)),
     sd != null
       ? card('sage', h('p.label.sage', {}, 'Ready when you are'),
-          h('p.body', {}, `Your scores move by about ${fmt(sd)} points from day to day. A standard trial could reliably pick up a change of about ${fmt(detectableEffect(sd, 0.5, 10, 7))} points.`))
-      : h('p.body', {}, `Keep scoring. After ${plural(Math.max(0, 10 - base.length), 'more day')} the trial can be sized to your own variability.`),
+          h('p.body', {}, `Your scores move by about ${fmt(sd)} points from day to day. A standard trial could reliably pick up a change of about ${fmt(detectableEffect(sd, 0.5, TRIAL_DEFAULTS.blockCount, TRIAL_DEFAULTS.blockDays))} points.`))
+      : h('p.body', {}, `Keep scoring. After ${plural(Math.max(0, BASELINE_MIN_DAYS - base.length), 'more day')} the trial can be sized to your own variability.`),
     h('button.btn.primary', { onclick: () => openSheet('setup') }, 'Set up a trial'),
     h('p.caption', {}, 'Keep logging as long as you like — more baseline only sharpens it.'));
 }
@@ -511,29 +554,41 @@ function baselineStatus() {
 function setupSheet() {
   const profile = store.profile;
   // Testing the same thing twice at once would compare it with itself.
-  const running = new Set(store.activeRecords.map((r) => r.trial.conditionB.id));
+  const running = new Set(store.activeRecords.flatMap((r) => (isComparison(r.trial) ? [r.trial.conditionB.id, r.trial.conditionA.id] : [r.trial.conditionB.id])));
   const menu = suggestedOrder(profile).filter((i) => !running.has(i.id));
   const hidden = LIBRARY.filter((i) => !menu.includes(i) && !running.has(i.id));
   const overlaps = store.overlapsForNewTrial;
   const blocks = blockCountForOverlaps(overlaps);
-  const total = blocks * 7 + (blocks - 1) * 3;
-  const st = ui.setup ??= { pick: menu[0]?.id ?? 'custom', custom: '', outcomeId: 'pain.intensity-nrs-11', note: '' };
-  const sd = store.baselineVariability;
+  const shape = { ...TRIAL_DEFAULTS, blockCount: blocks, blockDays: ui.setup?.blockDays ?? TRIAL_DEFAULTS.blockDays, washoutDays: ui.setup?.washoutDays ?? TRIAL_DEFAULTS.washoutDays };
+  const total = trialLength(shape);
+  const st = ui.setup ??= { pick: menu[0]?.id ?? 'custom', custom: '', outcomeId: PAIN_ID, note: '', against: 'usual' };
+  // The baseline only scores pain, so its variability only sizes pain trials.
+  const sd = st.outcomeId === PAIN_ID ? store.baselineVariability : null;
   const chosen = st.pick === 'custom' ? (st.custom.trim() ? customIntervention(st.custom.trim()) : null) : LIBRARY.find((i) => i.id === st.pick);
+  // Comparing with a second option instead of usual care. Only from the library, and
+  // never the same thing twice.
+  if (st.against === st.pick) st.against = 'usual';
+  const comparator = st.against === 'usual' ? null : menu.find((i) => i.id === st.against) ?? null;
   const outcome = OUTCOMES[st.outcomeId];
-  const detect = detectableEffect(sd ?? 1.5, 0.5, blocks, 7, outcome, overlaps);
+  const detect = detectableEffect(sd ?? 1.5, 0.5, blocks, shape.blockDays, outcome, overlaps);
+  // A block length sized to this person's own variability, when there's a baseline to size it from.
+  const suggested = sd != null && outcome.important != null ? plan(sd, 0.5, outcome.important, outcome, shape.washoutDays) : null;
 
   const option = (i) => h(`button.check${st.pick === i.id ? '.on' : ''}`, { onclick: () => { st.pick = i.id; render(); } },
     h('span.box', {}, st.pick === i.id ? '✓' : ''),
     h('div.grow', {}, h('div', { style: { fontSize: '16px' } }, i.displayName),
-      st.pick === i.id && h('p.caption', { style: { marginTop: '6px' } }, i.evidenceNote)));
+      st.pick === i.id && h('p.caption', { style: { marginTop: '6px' } }, i.evidenceNote),
+      st.pick === i.id && h('p.caption', { style: { marginTop: '4px' } }, `Source: ${i.evidenceSource}.`),
+      st.pick === i.id && i.trialTip && h('p.caption', { style: { marginTop: '4px', color: 'var(--ink-soft)' } }, `A fair test: ${i.trialTip}`)));
 
   const customField = h('input.field', { placeholder: 'Name it', value: st.custom, oninput: (e) => { st.custom = e.target.value; start.disabled = !e.target.value.trim(); } });
   const noteField = h('textarea.field', { placeholder: 'What exactly will you do? e.g. “20 minutes of heat, evenings”', rows: 2, oninput: (e) => { st.note = e.target.value; } }, st.note);
   const start = h('button.btn.primary', { disabled: !chosen, onclick: async () => {
     const pick = st.pick === 'custom' ? customIntervention(st.custom.trim()) : chosen;
-    await store.startTrial({ intervention: pick, outcomeId: st.outcomeId, note: st.note.trim() || null });
-    ui.setup = null; ui.sheet = null; ui.tab = 'today'; render();
+    await store.startTrial({ intervention: pick, comparator, outcomeId: st.outcomeId, note: st.note.trim() || null, blockDays: shape.blockDays, washoutDays: shape.washoutDays });
+    ui.setup = null; ui.sheet = null; ui.tab = 'today';
+    checkForCrisis(`${st.custom} ${st.note}`);
+    render();
     toast('Trial started. Today is day 1.');
   } }, 'Start the trial today');
 
@@ -545,6 +600,12 @@ function setupSheet() {
       h(`button.check${st.pick === 'custom' ? '.on' : ''}`, { onclick: () => { st.pick = 'custom'; render(); } },
         h('span.box', {}, st.pick === 'custom' ? '✓' : ''), h('div', { style: { fontSize: '16px' } }, 'Something else')),
       st.pick === 'custom' && customField),
+    h('p.label', {}, 'Compared with'),
+    h('div.chips', {}, [['usual', 'Nothing different'], ...menu.filter((i) => i.id !== st.pick).map((i) => [i.id, i.displayName])]
+      .map(([id, label]) => h(`button.chip${st.against === id ? '.on' : ''}`, { 'aria-pressed': String(st.against === id), onclick: () => { st.against = id; render(); } }, label))),
+    h('p.caption', {}, comparator
+      ? `Weeks of ${chosen?.displayName.toLowerCase() ?? 'your choice'} alternate with weeks of ${comparator.displayName.toLowerCase()}, in a random order. The result says which did more for you, if either.`
+      : 'The usual test: weeks on, weeks off. Choose a second option instead to find out which of two things works better for you.'),
     h('p.label', {}, 'Measured by'),
     h('div.stack.tight', {}, Object.values(OUTCOMES).map((o) => h(`button.check${st.outcomeId === o.id ? '.on' : ''}`, { onclick: () => { st.outcomeId = o.id; render(); } },
       h('span.box', {}, st.outcomeId === o.id ? '✓' : ''), h('div', { style: { fontSize: '16px' } }, o.displayName)))),
@@ -552,9 +613,17 @@ function setupSheet() {
     overlaps > 0 && card('clay', h('p.label', { style: { color: 'var(--clay)' } }, 'Running alongside other trials'),
       h('p.body', {}, `${overlaps === 1 ? 'One trial is already running. Its' : `${overlaps} trials are already running. Their`} on and off weeks will be accounted for, but every trial running at once makes each answer less precise — this one and ${overlaps === 1 ? 'the one' : 'the ones'} already going. A real change becomes easier to miss, and if two things interact that can’t be untangled.`),
       blocks > 10 && h('p.caption', {}, `To make up for some of that, this trial alternates over ${blocks} weeks instead of the usual 10.`)),
-    card('sage', h('p.label.sage', {}, 'What this trial can see'),
-      h('p.body', {}, `${blocks} alternating weeks, on and off in a random order, with 3 quiet days between each — ${total} days in all. ${sd != null ? 'With how much your scores move' : 'For typical day-to-day variation'}, it could reliably detect a change of about ${fmt(detect)} points${outcome.important != null ? `; a change worth caring about is around ${fmt(outcome.important, 0)}` : ''}.${outcome.important != null && detect > outcome.important ? ' A real change smaller than that could be missed — the result will say so if it is.' : ''}`),
-      sd == null && h('p.caption', {}, 'Finish at least 10 baseline days and this becomes a number about you.')),
+    h('p.label', {}, 'Length'),
+    h('p.caption', {}, 'Days in each block'),
+    h('div.chips', {}, [5, 7, 10, 14].map((d) => h(`button.chip${shape.blockDays === d ? '.on' : ''}`, { 'aria-pressed': String(shape.blockDays === d), onclick: () => { st.blockDays = d; render(); } }, `${d} days`))),
+    h('p.caption', {}, 'Quiet days between blocks, so one block’s effect can fade before the next'),
+    h('div.chips', {}, [0, 2, 3, 5].map((d) => h(`button.chip${shape.washoutDays === d ? '.on' : ''}`, { 'aria-pressed': String(shape.washoutDays === d), onclick: () => { st.washoutDays = d; render(); } }, d === 0 ? 'None' : `${d} days`))),
+    suggested && h('p.caption', {}, `Suggested for your scores: ${suggested.blockDays}-day blocks. `,
+      (suggested.blockDays !== shape.blockDays) && h('button.link', { style: { padding: 0 }, onclick: () => { st.blockDays = suggested.blockDays; render(); } }, 'Use that')),
+    shape.blockDays < 7 && h('p.caption', {}, 'Blocks shorter than a week can be swayed by one unusual day, and the result will flag it.'),
+    card(outcome.important != null && detect > outcome.important ? 'clay' : 'sage', h('p.label.sage', {}, 'What this trial can see'),
+      h('p.body', {}, `${blocks} alternating blocks of ${plural(shape.blockDays, 'day')}, ${comparator ? 'one then the other' : 'on and off'} in a random order, with ${plural(shape.washoutDays, 'quiet day')} between each — ${total} days in all. ${sd != null ? 'With how much your scores move' : 'For typical day-to-day variation'}, it could reliably detect a change of about ${fmt(detect)} points${outcome.important != null ? `; a change worth caring about is around ${fmt(outcome.important, 0)}` : ''}.${outcome.important != null && detect > outcome.important ? ' A real change smaller than that could be missed — the result will say so if it is.' : ''}`),
+      sd == null && h('p.caption', {}, st.outcomeId === PAIN_ID ? `Finish at least ${BASELINE_MIN_DAYS} baseline days and this becomes a number about you.` : 'Your baseline scores pain only, so this uses typical day-to-day variation for this measure.')),
     start,
   ];
 }
@@ -565,7 +634,13 @@ function resultBlock(a, record) {
   const trial = a.trial;
   const ready = !(a.verdict.kind === 'inconclusive' && ['insufficientData', 'tooFewCompletedBlocks'].includes(a.verdict.reason));
   const rerun = rerunSuggestion(a);
-  const title = {
+  const ahead = a.verdict.direction === 'improved' ? trial.conditionB.displayName : trial.conditionA.displayName;
+  const title = isComparison(trial) ? {
+    meaningful: `${ahead} came out ahead.`,
+    probable: `${ahead} edged ahead.`,
+    null: 'No meaningful difference.',
+    inconclusive: ready ? 'Not settled.' : 'Too early to say.',
+  }[a.verdict.kind] : {
     meaningful: a.verdict.direction === 'improved' ? 'This seems to help.' : 'This seems to make things worse.',
     probable: 'Something changed.',
     null: 'No meaningful effect.',
@@ -573,11 +648,14 @@ function resultBlock(a, record) {
   }[a.verdict.kind];
   const span = 5;
   const pos = (v) => `${Math.max(0, Math.min(100, ((v + span) / (2 * span)) * 100))}%`;
-  const better = a.outcome.lowerIsBetter ? 'Better' : 'Worse';
-  const worse = a.outcome.lowerIsBetter ? 'Worse' : 'Better';
+  // Left of centre is a lower score. In a comparison, name who that favours.
+  const [bName, aName] = [trial.conditionB.displayName, trial.conditionA.displayName];
+  const better = isComparison(trial) ? `${a.outcome.lowerIsBetter ? bName : aName} better` : a.outcome.lowerIsBetter ? 'Better' : 'Worse';
+  const worse = isComparison(trial) ? `${a.outcome.lowerIsBetter ? aName : bName} better` : a.outcome.lowerIsBetter ? 'Worse' : 'Better';
 
   return h('div.stack', {},
-    h('p.label.sage', {}, trial.conditionB.displayName),
+    h('div.row', {}, guide(a.verdict.kind === 'inconclusive' ? 'think' : 'main'),
+      h('p.label.sage', {}, trialName(trial))),
     h('h1.display', {}, title),
     h('p.reading', {}, headline(a)),
     ready && Number.isFinite(a.low) && card('',
@@ -587,12 +665,29 @@ function resultBlock(a, record) {
         h('div', { style: { position: 'absolute', top: '10px', bottom: '10px', left: pos(-a.thresholds.trivial), width: `calc(${pos(a.thresholds.trivial)} - ${pos(-a.thresholds.trivial)})`, background: 'var(--band-wash)', borderRadius: '4px' } }),
         h('div', { style: { position: 'absolute', top: '14px', height: '12px', left: pos(a.low), width: `calc(${pos(a.high)} - ${pos(a.low)})`, background: 'var(--sage)', borderRadius: '6px', opacity: 0.55 } }),
         h('div', { style: { position: 'absolute', top: '10px', height: '20px', width: '3px', left: `calc(${pos(a.effect)} - 1px)`, background: 'var(--ink)', borderRadius: '2px' } })),
-      h('div.row.between.caption', {}, h('span', {}, `← ${better}`), h('span', {}, 'No change'), h('span', {}, `${worse} →`)),
+      h('div.row.between.caption', {}, h('span', {}, `← ${better}`), h('span', {}, isComparison(trial) ? 'No difference' : 'No change'), h('span', {}, `${worse} →`)),
       h('p.caption', {}, `Best estimate ${a.effect > 0 ? '+' : ''}${fmt(a.effect)} points; 95% range ${fmt(a.low)} to ${fmt(a.high)}. The shaded middle is too small to matter.`)),
-    rerun && card('sage', h('p.label.sage', {}, 'Next'), h('p.body', {}, rerun)),
+    rerun && card('sage', h('p.label.sage', {}, 'Next'), h('p.body', {}, rerun),
+      record.finishedOn && !['insufficientData', 'tooFewCompletedBlocks', 'underpowered'].includes(a.verdict.reason)
+        && h('button.btn.outline', { onclick: () => setUpRerun(a) }, 'Set up this rerun')),
     card('', h('p.label', {}, 'Scores'), trace(record.entries, trial, { today: record.finishedOn ? null : store.currentDay }), traceLegend(trial)),
     ready && a.threats.length > 0 && card('', h('p.label', {}, 'Worth knowing'), a.threats.map((t) => h('p.body', {}, describeThreat(t)))),
-    h('button.btn.outline', { onclick: () => openSheet('clinician', { a }) }, 'Summary for a clinician'));
+    h('button.btn.outline', { onclick: () => openSheet('clinician', { a, finishedOn: record.finishedOn }) }, 'Summary for a clinician'));
+}
+
+// Opens trial setup filled in with the same question and a length sized to the result.
+function setUpRerun(a) {
+  const t = a.trial;
+  const p = plan(Math.max(a.a.standardDeviation, a.b.standardDeviation), a.rho, a.thresholds.important, a.outcome);
+  const known = LIBRARY.some((i) => i.id === t.conditionB.id);
+  ui.setup = {
+    pick: known ? t.conditionB.id : 'custom', custom: known ? '' : t.conditionB.displayName,
+    outcomeId: t.outcomeId, note: t.userNote ?? '',
+    against: isComparison(t) ? t.conditionA.id : 'usual',
+    blockDays: p.blockDays, washoutDays: p.washoutDays,
+  };
+  ui.sheet = { kind: 'setup' };
+  render();
 }
 
 function resultTab() {
@@ -605,12 +700,13 @@ function resultTab() {
       : header('No result yet', running ? 'Keep logging — the first comparison appears once a few weeks have finished.'
         : history.length ? 'Nothing running right now. Your earlier results are below.' : 'Results appear here once a trial is running.'),
     running && store.focusedIsFinished && h('button.btn.primary', { onclick: () => openSheet('endTrial') }, 'Close this trial and keep the result'),
+    (running || history.length > 0) && h('button.btn.outline', { onclick: () => openSheet('record') }, 'Care record for your next appointment'),
     history.length > 0 && h('div.stack.tight', {}, h('p.label', {}, 'Earlier trials'),
       history.map((r) => {
         const ra = store.analysis(r);
         return h('button.check', { onclick: () => openSheet('past', { record: r }) },
-          h('div.grow', {}, h('div', { style: { fontSize: '16px' } }, r.trial.conditionB.displayName),
-            h('p.caption', {}, `Finished ${new Date(r.finishedOn).toLocaleDateString()} · ${ra ? { meaningful: 'clear change', probable: 'some change', null: 'no meaningful effect', inconclusive: 'not settled' }[ra.verdict.kind] : 'no data'}`)),
+          h('div.grow', {}, h('div', { style: { fontSize: '16px' } }, trialName(r.trial)),
+            h('p.caption', {}, `${r.endedEarly ? 'Ended early' : 'Finished'} ${new Date(r.finishedOn).toLocaleDateString()} · ${shortVerdict(ra)}`)),
           h('span.muted', {}, '›'));
       })));
 }
@@ -618,12 +714,69 @@ function resultTab() {
 // ── practice ─────────────────────────────────────────────────────────────────────
 
 function practiceTab() {
+  const planned = Object.values(store.flarePlan).some(Boolean);
   return h('div.stack', {},
-    header('Practice', 'Short guided pauses. The same every time, for when you need something to do with your attention.'),
+    header('Learn', 'How pain works, in short reads. Then a few guided pauses for the harder minutes.'),
+    h('div.stack.tight', {}, LESSONS.map((l) => h('button.check', { onclick: () => openSheet('lesson', { id: l.id }) },
+      h('div.grow', {}, h('div', { style: { fontSize: '16px' } }, l.title), h('p.caption', {}, `${l.minutes} min read`)),
+      h('span.muted', {}, '›')))),
+    h('button.check', { onclick: () => openSheet('library') },
+      h('div.grow', {}, h('div', { style: { fontSize: '16px' } }, 'Things people test'), h('p.caption', {}, 'What the evidence says about each, and what a fair test looks like')),
+      h('span.muted', {}, '›')),
+    card('sage', h('p.label', {}, 'Your flare plan'),
+      h('p.body', {}, planned ? 'Written and ready. It appears on Today whenever you mark a flare.' : 'A short note to yourself for the hard days, written on an easier one.'),
+      h('button.btn.outline', { onclick: () => openSheet('flarePlan') }, planned ? 'Look at it' : 'Write it')),
+    h('p.label', {}, 'Practice'),
     PRACTICES.map((p) => card('',
       h('div.row.between', {}, h('h2', { style: { margin: 0, fontSize: '18px', fontWeight: 600 } }, p.title), h('span.caption', {}, p.subtitle)),
       h('p.body', {}, p.note),
-      h('button.btn.primary', { onclick: () => play(p) }, 'Begin'))));
+      h('button.btn.primary', { onclick: () => play(p) }, 'Begin'))),
+    card('', h('p.label', {}, 'People who can help'),
+      SUPPORT.map(([name, text, href]) => h('div', {},
+        h('div', { style: { fontWeight: 500 } }, href ? h('a', { href, target: '_blank', rel: 'noopener' }, name) : name),
+        h('p.caption', {}, text))),
+      h('p.caption', {}, 'If things feel unbearable right now:'),
+      ...crisisLinks()));
+}
+
+function lessonSheet(id) {
+  const l = LESSONS.find((x) => x.id === id);
+  if (!l) return [];
+  return [
+    ...l.paras.map((t) => h('p.reading', {}, t)),
+    l.action === 'flarePlan' && h('button.btn.primary', { onclick: () => openSheet('flarePlan') }, 'Write my flare plan'),
+    l.action === 'record' && h('button.btn.primary', { onclick: () => openSheet('record') }, 'Open my care record'),
+    h('p.caption', {}, `Source: ${l.source}. General education, not advice about your own care.`),
+  ];
+}
+
+const FLARE_FIELDS = [
+  ['signs', 'Early signs a flare is starting', 'e.g. stiffer in the morning, sleep slipping'],
+  ['helps', 'What usually helps', 'e.g. heat, a short walk, lying on my side'],
+  ['drop', 'What I can safely drop for a few days', 'e.g. cooking from scratch, the gym'],
+  ['tell', 'Who to tell, and what I need from them', 'e.g. my partner — to take the school run'],
+];
+
+function flarePlanSheet() {
+  const plan = store.flarePlan;
+  return [
+    h('p.body', {}, 'Written on a calmer day, for a harder one. Keep it short — you’ll be reading it when thinking is difficult.'),
+    ...FLARE_FIELDS.map(([key, label, hint]) => {
+      const area = h('textarea.field', { placeholder: hint, rows: 2, 'aria-label': label }, plan[key] ?? '');
+      area.addEventListener('change', () => { checkForCrisis(area.value); store.setFlarePlan(key, area.value); });
+      return h('div.stack.tight', {}, h('p.label', {}, label), area);
+    }),
+    h('p.caption', {}, 'Saved as you go, on this device.'),
+  ];
+}
+
+function flarePlanCard() {
+  const plan = store.flarePlan;
+  const rows = FLARE_FIELDS.filter(([key]) => plan[key]);
+  if (!rows.length) return null;
+  return card('sage', h('p.label', {}, 'Your flare plan'),
+    rows.map(([key, label]) => h('div', {}, h('p.caption', {}, label), h('p.body', { style: { color: 'var(--ink)' } }, plan[key]))),
+    h('p.caption', {}, 'Be gentle with yourself today. A flare is a hard day, not a setback in the trial.'));
 }
 
 function play(p) {
@@ -656,6 +809,63 @@ function play(p) {
 }
 
 // ── more ─────────────────────────────────────────────────────────────────────────
+
+function crisisLinks() {
+  const line = crisisLine();
+  return [
+    h('a.btn.primary', { href: line.href, style: { textDecoration: 'none' }, ...(line.href.startsWith('http') ? { target: '_blank', rel: 'noopener' } : {}) }, line.label),
+    h('p.caption', {}, 'US & Canada: call or text 988. UK & Ireland: Samaritans on 116 123. Australia: Lifeline on 13 11 14. Elsewhere: ', h('a', { href: 'https://findahelpline.com', target: '_blank', rel: 'noopener' }, 'findahelpline.com'), '. In an emergency, call your local emergency number.'),
+  ];
+}
+
+// Shown when something written reads like a crisis. Once per piece of text, so editing
+// the same note doesn't bring it back each time.
+let lastCrisisText = null;
+function checkForCrisis(text) {
+  if (!mentionsCrisis(text) || text === lastCrisisText) return;
+  lastCrisisText = text;
+  ui.sheet = { kind: 'support' };
+  ui.crisisAt = Date.now();
+  return true;
+}
+
+// Reminder times are a setting of this device rather than of a profile.
+const REMINDER_KEY = 'litmus.reminders';
+function savedReminderTimes() {
+  try { const t = JSON.parse(localStorage.getItem(REMINDER_KEY)); if (Array.isArray(t) && t.length) return t; } catch {}
+  return null;
+}
+
+function remindersSheet() {
+  const saved = savedReminderTimes();
+  const times = (saved ?? ['20:00']).slice();
+  const list = h('div.stack.tight');
+  const draw = () => list.replaceChildren(...times.map((t, i) => h('div.row', {},
+    h('input.field', { type: 'time', value: t, 'aria-label': `Reminder ${i + 1}`, onchange: (e) => { times[i] = e.target.value; } }),
+    times.length > 1 && h('button.link', { onclick: () => { times.splice(i, 1); draw(); } }, 'Remove'))),
+    times.length < 3 && h('button.link', { onclick: () => { times.push('12:00'); draw(); } }, 'Add another time'));
+  draw();
+  const add = async () => {
+    const valid = times.filter((t) => parseTime(t));
+    if (!valid.length) { toast('Choose a time first.'); return; }
+    // ?log opens straight to today's score.
+    const url = new URL('./?log', location.href).href;
+    const file = new File([reminderCalendar(valid, { url })], 'litmus-reminder.ics', { type: 'text/calendar' });
+    const a = h('a', { href: URL.createObjectURL(file), download: file.name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    try { localStorage.setItem(REMINDER_KEY, JSON.stringify(valid)); } catch {}
+    toast('Open the file to add it to your calendar.');
+  };
+  return [
+    h('p.body', {}, 'A web app can’t send notifications on iPhone, so Litmus adds a repeating event to your calendar instead. Its alert is the reminder, and the link in it opens Litmus.'),
+    list,
+    h('button.btn.primary', { onclick: add }, 'Add to calendar'),
+    h('p.caption', {}, 'On iPhone, open the downloaded file and choose Add All. To stop the reminders, delete the event in Calendar.'),
+    h('p.caption', {}, 'If you added Litmus to your Home Screen, open it from there when the alert comes. The link in the event opens Safari, which keeps its own separate copy of your data.'),
+    saved && h('p.caption', {}, `Last added: ${saved.join(', ')}.`),
+  ];
+}
 
 // Backups go through the share sheet, where iOS offers "Save to Files" and so iCloud
 // Drive. Where sharing a file isn't supported, it downloads instead.
@@ -698,13 +908,22 @@ function moreTab() {
     header('More'),
     card('clay', h('p.label', {}, 'If you’re struggling right now'),
       h('p.body', {}, 'Pain that doesn’t let up can be exhausting in ways that are hard to explain. If you’re thinking about harming yourself, please reach out now.'),
-      h('a.btn.primary', { href: 'tel:988', style: { textDecoration: 'none' } }, 'Call or text 988 (US & Canada)'),
-      h('p.caption', {}, 'UK & Ireland: Samaritans on 116 123. Elsewhere: ', h('a', { href: 'https://findahelpline.com', target: '_blank', rel: 'noopener' }, 'findahelpline.com'), '. In an emergency, call your local emergency number.')),
+      ...crisisLinks()),
     store.backupIsDue && backupNudge(),
     h('div.stack.tight', {},
       h('p.label', {}, 'Tracking'),
       row('Symptoms you track', 'symptoms', store.trackedSymptoms.length ? store.trackedSymptoms.map((x) => x.name).join(', ') : null),
-      row('Medications', 'medications', store.medications.length ? plural(store.medications.length, 'medication') : null)),
+      row('Medications', 'medications', store.medications.length ? plural(store.medications.length, 'medication') : null),
+      row('Daily reminder', 'reminders', savedReminderTimes()?.join(', ') ?? null)),
+    h('div.stack.tight', {},
+      h('p.label', {}, 'Yours'),
+      row('Care record for appointments', 'record', 'Everything tried and ruled out, on one page'),
+      row('Journal', 'journal', store.journal.length ? plural(store.journal.length, 'entry', 'entries') : 'Private, and never part of a trial'),
+      labsOn() && row('Community (preview)', 'community', 'Shared results — only on this device for now')),
+    card('', h('p.label', {}, 'Labs'),
+      h('p.body', {}, 'The community is designed but has no server yet. Turn on the preview to try it: everything stays on this device and no one else can see it.'),
+      h(`button.btn.outline${labsOn() ? '.on' : ''}`, { 'aria-pressed': String(labsOn()), onclick: () => { setLabs(!labsOn()); render(); } },
+        labsOn() ? 'Community preview is on' : 'Turn on the community preview')),
     card('', h('p.label', {}, 'Your data'),
       h('p.body', {}, 'Everything is stored in this browser on this device, and nowhere else. Back up regularly: if the phone is reset or lost, a backup is how you get your history back. It’s the same file the iPhone app reads, so it also moves you between the two.'),
       !standalone && h('p.caption', {}, 'Tip: in Safari, Share → Add to Home Screen. An installed web app keeps its data more reliably than a browser tab.'),
@@ -713,6 +932,10 @@ function moreTab() {
       h('p.caption', {}, days == null ? 'Never backed up.' : days === 0 ? 'Last backed up today.' : `Last backed up ${plural(days, 'day')} ago.`),
       restoreButton(),
       h('p.caption', {}, 'After a reset: install Litmus again, choose “Restore from an export file”, and pick the backup from iCloud Drive. Restoring always creates a new profile, so it never overwrites anything.')),
+    card('', h('p.label', {}, 'Our promise about your data'),
+      h('p.body', {}, 'Your health data stays on this device. There’s no account, no analytics, no advertising, and nothing is sold or shared. Litmus never sends your data anywhere — a backup only goes where you choose to save it.'),
+      h('p.body', {}, 'If syncing or a community is ever added, it will be off unless you turn it on, it will say exactly what leaves the device, and this promise will be updated first.'),
+      h('p.caption', {}, 'Your full history can always be exported, as an open JSON file, from “Back up” above.')),
     card('', h('p.label', {}, 'How the result is worked out'),
       h('p.body', {}, 'Your trial switches the thing being tested on and off in randomised weeks. Litmus compares each on-week with the off-week beside it, so slow drifts and good or bad stretches mostly cancel out, and it only calls something a real change when the whole plausible range clears the “too small to matter” band.'),
       h('p.caption', {}, 'It can’t control for expectation — you know when you’re doing the thing — and it isn’t medical advice.')),
@@ -736,7 +959,7 @@ function symptomsSheet() {
     h('p.label', {}, 'Add'),
     h('div.chips', {}, COMMON_SYMPTOMS.filter((n) => !names.has(n.toLowerCase()))
       .map((n) => h('button.chip', { onclick: () => store.addSymptom(n) }, `+ ${n}`))),
-    h('div.row', {}, field, h('button.btn.outline', { style: { width: 'auto', padding: '0 18px' }, onclick: () => store.addSymptom(custom) }, 'Add')),
+    h('div.row', {}, field, h('button.btn.outline', { style: { width: 'auto', padding: '0 18px' }, onclick: () => { checkForCrisis(custom); store.addSymptom(custom); } }, 'Add')),
   ];
 }
 
@@ -759,15 +982,16 @@ function addMedicationSheet() {
   const form = { name: '', dose: '', startedOn: dayKey(), note: '' };
   const save = h('button.btn.primary', { disabled: true, onclick: async () => {
     await store.addMedication(form);
-    openSheet('medications');
+    checkForCrisis([form.name, form.dose, form.note].filter(Boolean).join(' '));
+    if (ui.sheet?.kind === 'support') render(); else openSheet('medications');
   } }, 'Save');
   return [
-    h('input.field', { placeholder: 'Name', oninput: (e) => { form.name = e.target.value; save.disabled = !form.name.trim(); } }),
-    h('input.field', { placeholder: 'Dose (optional)', oninput: (e) => { form.dose = e.target.value; } }),
+    h('input.field', { placeholder: 'Name', 'aria-label': 'Medication name', oninput: (e) => { form.name = e.target.value; save.disabled = !form.name.trim(); } }),
+    h('input.field', { placeholder: 'Dose (optional)', 'aria-label': 'Dose', oninput: (e) => { form.dose = e.target.value; } }),
     h('label.caption', {}, 'Started'),
-    h('input.field', { type: 'date', value: form.startedOn, max: dayKey(), oninput: (e) => { form.startedOn = e.target.value || dayKey(); } }),
+    h('input.field', { type: 'date', 'aria-label': 'Started', value: form.startedOn, max: dayKey(), oninput: (e) => { form.startedOn = e.target.value || dayKey(); } }),
     h('textarea.field', { placeholder: 'Anything to remember (optional)', rows: 2, oninput: (e) => { form.note = e.target.value; } }),
-    h('p.caption', {}, 'Written as you’d say it. Litmus doesn’t read, check or interpret any of this.'),
+    h('p.caption', {}, 'Written as you’d say it, and kept on this device.'),
     save,
   ];
 }
@@ -809,22 +1033,180 @@ function medicationSheet(id) {
       h('p.caption', {}, 'Averages for the 4 weeks before starting and the time since. This can’t show the medication caused a change: anything else that shifted at the same time is mixed in, including simply expecting it to help. Worth bringing to your prescriber, not a verdict.')),
     !m.stoppedOn && card('', h('p.label', {}, 'Dose changed'),
       h('input.field', { placeholder: 'New dose', oninput: (e) => { newDose = e.target.value; } }),
-      h('input.field', { type: 'date', value: changeOn, max: dayKey(), oninput: (e) => { changeOn = e.target.value || dayKey(); } }),
+      h('input.field', { type: 'date', 'aria-label': 'Date of the dose change', value: changeOn, max: dayKey(), oninput: (e) => { changeOn = e.target.value || dayKey(); } }),
       h('button.btn.outline', { onclick: async () => {
         if (!newDose.trim()) return;
         await store.updateMedication(id, (x) => { x.doseChanges.push({ date: changeOn, dose: newDose.trim() }); });
       } }, 'Record change')),
     !m.stoppedOn && card('', h('p.label', {}, 'Stopped'),
-      h('input.field', { type: 'date', value: stopOn, max: dayKey(), oninput: (e) => { stopOn = e.target.value || dayKey(); } }),
+      h('input.field', { type: 'date', 'aria-label': 'Date stopped', value: stopOn, max: dayKey(), oninput: (e) => { stopOn = e.target.value || dayKey(); } }),
       h('button.btn.outline', { onclick: () => store.updateMedication(id, (x) => { x.stoppedOn = stopOn; }) }, 'Mark as stopped')),
     danger,
   ];
 }
 
+// ── journal and care record ──────────────────────────────────────────────────────
+
+function journalSheet() {
+  let draft = '';
+  const area = h('textarea.field', { placeholder: 'Whatever’s on your mind', rows: 4, oninput: (e) => { draft = e.target.value; } });
+  const entries = store.journal;
+  return [
+    h('p.body', {}, 'For anything the numbers can’t carry. It stays on this device, it’s never used in a trial, and it isn’t part of the care record.'),
+    area,
+    h('button.btn.primary', { onclick: async () => {
+      if (!draft.trim()) return;
+      checkForCrisis(draft);
+      await store.addJournalEntry(draft);
+    } }, 'Save entry'),
+    entries.length > 0 && h('div.stack.tight', {}, entries.map((x) => card('',
+      h('div.row.between', {}, h('p.caption', {}, new Date(x.date).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })),
+        h('button.link', { onclick: () => store.deleteJournalEntry(x.id) }, 'Delete')),
+      h('p.body', { style: { color: 'var(--ink)', whiteSpace: 'pre-wrap' } }, x.text)))),
+  ];
+}
+
+function recordText() {
+  const trials = store.person.trials.map((r) => ({ record: r, analysis: store.analysis(r), dayNow: r.finishedOn ? null : store.dayIn(r) }));
+  const pain = store.painByDay();
+  const medications = store.medications.map((m) => ({ ...m, comparison: beforeAfter(pain, m.startedOn, m.stoppedOn) }));
+  return careRecord({
+    name: store.person.name, profile: store.profile, trials, medications,
+    recent: store.recentPain(28), ownQuestions: store.questions.map((q) => q.text),
+  });
+}
+
+// A short editable list kept in the profile, shown in the care record.
+function listCard(label, field, placeholder, caption) {
+  let draft = '';
+  const items = store.profile[field] ?? [];
+  const input = h('input.field', { placeholder, oninput: (e) => { draft = e.target.value; } });
+  return card('', h('p.label', {}, label),
+    items.map((x, i) => h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, x),
+      h('button.link', { onclick: () => store.removeProfileItem(field, i) }, 'Remove'))),
+    h('div.row', {}, input, h('button.btn.outline', { 'aria-label': `Add to ${label.toLowerCase()}`, style: { width: 'auto', padding: '0 18px' }, onclick: () => { checkForCrisis(draft); store.addProfileItem(field, draft); } }, 'Add')),
+    h('p.caption', {}, caption));
+}
+
+function recordSheet() {
+  const text = recordText();
+  let draft = '';
+  const field = h('input.field', { placeholder: 'A question of your own', oninput: (e) => { draft = e.target.value; } });
+  return [
+    h('p.body', {}, 'One page for a new specialist, a GP or a physio: what you’ve reported, what you’ve tested and what it showed, your medications, and questions to raise. Journal entries are never included.'),
+    listCard('Tried before', 'alsoTried', 'e.g. physio in 2023, a nerve block', 'Treatments from before Litmus, in your words.'),
+    listCard('Ruled out by a clinician', 'ruledOut', 'e.g. a disc problem, on an MRI', 'Only what you’ve actually been told.'),
+    card('', h('p.label', {}, 'Your questions'),
+      store.questions.map((q) => h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, q.text),
+        h('button.link', { onclick: () => store.removeQuestion(q.id) }, 'Remove'))),
+      h('div.row', {}, field, h('button.btn.outline', { style: { width: 'auto', padding: '0 18px' }, onclick: () => { checkForCrisis(draft); store.addQuestion(draft); } }, 'Add')),
+      h('p.caption', {}, 'Yours come first. Litmus adds a few more from what you’ve logged — questions for the clinician, never advice.')),
+    h('section.card.print-me', {}, h('pre.pre', {}, text)),
+    h('button.btn.outline', { onclick: () => window.print() }, 'Print or save as PDF'),
+    h('button.btn.primary', { onclick: async () => {
+      try { if (navigator.share) await navigator.share({ title: 'Pain record', text }); else { await navigator.clipboard.writeText(text); toast('Copied.'); } } catch {}
+    } }, navigator.share ? 'Share' : 'Copy'),
+  ];
+}
+
+// ── community (preview) ──────────────────────────────────────────────────────────
+
+const LABS_KEY = 'litmus.labs.community';
+function labsOn() { try { return localStorage.getItem(LABS_KEY) === 'on'; } catch { return false; } }
+function setLabs(on) { try { on ? localStorage.setItem(LABS_KEY, 'on') : localStorage.removeItem(LABS_KEY); } catch {} }
+
+let community = null;
+const communityStore = () => (community ??= new LocalCommunity());
+
+function resultCard(result) {
+  const c = cardSummary(result);
+  return h('div.stack.tight', { style: { gap: '4px' } },
+    h('p.label.sage', {}, c.title),
+    h('div', { style: { fontSize: '18px', fontFamily: 'var(--serif)' } }, c.verdict),
+    c.range && h('p.caption', {}, c.range),
+    h('p.caption', {}, c.detail));
+}
+
+function communitySheet(sh) {
+  const cm = communityStore();
+  const view = sh.view ?? 'feed';
+  const go = (v, extra = {}) => { ui.sheet = { kind: 'community', view: v, ...extra }; render(); };
+  const tabs = h('div.chips', {}, [['feed', 'Shared results'], ['share', 'Share yours'], ['mod', 'Moderator view']]
+    .map(([id, label]) => h(`button.chip${view === id ? '.on' : ''}`, { onclick: () => go(id) }, label)));
+  const banner = card('clay', h('p.body', {}, 'Preview. Everything here stays on this device — no one else can see it yet. It shows how sharing will work once there’s a server and a moderator.'));
+  const after = (res, okText) => {
+    if (!res.ok) { toast(res.problem); return false; }
+    if (res.held) { ui.sheet = { kind: 'support' }; render(); return false; }
+    toast(res.soundsLikeAdvice ? `${okText} A reminder: this space is for what happened to you, not advice for others.` : okText);
+    return true;
+  };
+
+  let body;
+  if (view === 'share') {
+    const done = store.completed.slice().reverse();
+    const chosen = done.find((r) => r.id === sh.pick) ?? done[0];
+    let note = '';
+    const count = h('p.caption', {}, `0/${NOTE_LIMIT}`);
+    const area = h('textarea.field', { placeholder: 'Anything that would help someone understand what you did (optional)', rows: 3, maxlength: NOTE_LIMIT,
+      oninput: (e) => { note = e.target.value; count.textContent = `${note.length}/${NOTE_LIMIT}`; } });
+    const result = chosen && anonymisedResult(chosen, store.analysis(chosen), store.profile);
+    body = done.length === 0
+      ? [h('p.body', {}, 'Sharing starts from a finished trial, so there’s something real to show. Once one is finished, it can be shared here.')]
+      : [
+          done.length > 1 && h('div.chips', {}, done.map((r) => h(`button.chip${r === chosen ? '.on' : ''}`, { onclick: () => go('share', { pick: r.id }) }, trialName(r.trial)))),
+          card('', resultCard(result)),
+          h('p.caption', {}, `Shared as ${cm.handle}. Only what’s on the card is shared — no name, no dates, no notes from your log.`),
+          area, count,
+          h('button.btn.primary', { onclick: () => { if (after(cm.post(result, note), 'Shared.')) go('feed'); } }, 'Share this result'),
+        ];
+  } else if (view === 'mod') {
+    const q = cm.queue();
+    body = [
+      h('p.body', {}, 'What one moderator would see: anything held by the crisis check, and anything reported. Nothing held is ever shown to other people.'),
+      q.length === 0 ? h('p.caption', {}, 'Nothing waiting.') : q.map((item) => card('',
+        h('p.label', {}, item.reason === 'crisis' ? 'Held: crisis language' : `Reported ${plural((item.reply ?? item.post).reports.length, 'time')}`),
+        h('p.body', { style: { color: 'var(--ink)' } }, item.reply ? item.reply.text : (item.post.note || cardSummary(item.post.result).title)),
+        item.reason === 'crisis' && h('p.caption', {}, 'The writer was shown crisis resources when they posted. A real moderator would follow the safety policy here.'),
+        h('div.row', {},
+          h('button.btn.outline', { onclick: () => { cm.moderate(item.post.id, item.reply?.id ?? null, 'keep'); render(); } }, 'Keep'),
+          h('button.btn.outline', { onclick: () => { cm.moderate(item.post.id, item.reply?.id ?? null, 'remove'); render(); } }, 'Remove')))),
+    ];
+  } else {
+    const posts = cm.feed();
+    body = [
+      h('p.caption', {}, `You appear as ${cm.handle}. There are no profiles and no private messages.`),
+      posts.length === 0 && h('p.body', {}, 'Nothing shared yet. Results appear here once people share finished trials.'),
+      posts.map((p) => {
+        let draft = '';
+        const field = h('input.field', { placeholder: 'Reply with your own experience', maxlength: NOTE_LIMIT, oninput: (e) => { draft = e.target.value; } });
+        return card('',
+          resultCard(p.result),
+          p.note && h('p.body', { style: { color: 'var(--ink)' } }, p.note),
+          h('div.row.between', {}, h('p.caption', {}, `${p.handle} · ${new Date(p.at).toLocaleDateString()}`),
+            p.mine ? h('button.link', { onclick: () => { cm.deleteOwn(p.id); render(); } }, 'Delete')
+              : h('button.link', { onclick: () => { toast(cm.report(p.id) ? 'Reported. A moderator will look at it.' : 'Already reported.'); render(); } }, 'Report')),
+          p.replies.length > 0 && h('div.stack.tight', { style: { borderLeft: '2px solid var(--line)', paddingLeft: '12px' } },
+            p.replies.map((r) => h('div', {},
+              h('p.body', { style: { color: 'var(--ink)' } }, r.text),
+              h('p.caption', {}, r.status === 'held' ? `${r.handle} · waiting for a moderator` : r.handle)))),
+          h('div.row', {}, field, h('button.btn.outline', { style: { width: 'auto', padding: '0 18px' },
+            onclick: () => { if (after(cm.reply(p.id, draft), 'Replied.')) render(); } }, 'Reply')));
+      }),
+      h('p.caption', {}, 'This is a place for what happened to you, not advice. Links can’t be posted.'),
+    ];
+  }
+  return [banner, tabs, ...[body].flat()];
+}
+
 // ── sheets ───────────────────────────────────────────────────────────────────────
 
 function openSheet(kind, data = {}) { ui.sheet = { kind, ...data }; render(); }
-function closeSheet() { ui.sheet = null; ui.setup = null; render(); }
+function closeSheet() {
+  // Leaving a text field fires the crisis check just before a "Done" tap lands; the
+  // support sheet it raised must not be closed by that same tap.
+  if (ui.sheet?.kind === 'support' && Date.now() - (ui.crisisAt ?? 0) < 800) return;
+  ui.sheet = null; ui.setup = null; render();
+}
 
 function sheet() {
   const sh = ui.sheet;
@@ -834,16 +1216,34 @@ function sheet() {
     case 'setup': title = store.activeRecords.length ? 'Start another trial' : 'Set up a trial'; body = setupSheet(); break;
     case 'symptoms': title = 'Symptoms'; body = symptomsSheet(); break;
     case 'medications': title = 'Medications'; body = medicationsSheet(); break;
+    case 'reminders': title = 'Daily reminder'; body = remindersSheet(); break;
+    case 'library': title = 'Things people test';
+      body = [h('p.body', {}, 'The same list for everyone. It’s a menu with the evidence attached, not a recommendation — what suits you is a question for you and the people who treat you.'),
+        LIBRARY.map((i) => card('', h('p.label.sage', {}, i.displayName), h('p.body', {}, i.evidenceNote),
+          h('p.caption', {}, `Source: ${i.evidenceSource}.`),
+          i.trialTip && h('p.caption', { style: { color: 'var(--ink-soft)' } }, `A fair test: ${i.trialTip}`)))];
+      break;
+    case 'lesson': title = LESSONS.find((x) => x.id === sh.id)?.title ?? 'Learn'; body = lessonSheet(sh.id); break;
+    case 'flarePlan': title = 'Flare plan'; body = flarePlanSheet(); break;
+    case 'journal': title = 'Journal'; body = journalSheet(); break;
+    case 'record': title = 'Care record'; body = recordSheet(); break;
+    case 'community': title = 'Community'; body = communitySheet(sh); break;
+    case 'support': title = 'You don’t have to carry this alone';
+      body = [h('p.reading', {}, 'What you wrote sounds really hard. If you’re thinking about harming yourself or ending your life, please talk to someone now — they’re there for exactly this, any time of day.'),
+        ...crisisLinks(),
+        h('p.caption', {}, 'Your note is saved as you wrote it. Litmus doesn’t send it anywhere.')];
+      break;
     case 'addMedication': title = 'Add a medication'; body = addMedicationSheet(); break;
     case 'medication': title = store.medications.find((x) => x.id === sh.id)?.name ?? 'Medication'; body = medicationSheet(sh.id); break;
     case 'clinician': {
-      const text = clinicianSummary(sh.a, store.person.name);
+      const text = clinicianSummary(sh.a, store.person.name, sh.finishedOn);
       title = 'For a clinician';
       body = [h('p.body', {}, 'One page to show or send. It states the method, the result and its limits, and recommends nothing.'),
-        card('', h('pre.pre', {}, text)),
+        h('section.card.print-me', {}, h('pre.pre', {}, text)),
         h('button.btn.primary', { onclick: async () => {
           try { if (navigator.share) await navigator.share({ title: 'Self-experiment summary', text }); else { await navigator.clipboard.writeText(text); toast('Copied.'); } } catch {}
-        } }, navigator.share ? 'Share' : 'Copy')];
+        } }, navigator.share ? 'Share' : 'Copy'),
+        h('button.btn.outline', { onclick: () => window.print() }, 'Print or save as PDF')];
       break;
     }
     case 'past': {
@@ -855,7 +1255,7 @@ function sheet() {
     case 'endTrial': {
       const done = store.focusedIsFinished;
       title = done ? 'Close this trial' : 'End this trial';
-      body = [h('p.label.sage', {}, store.trial?.conditionB.displayName ?? ''),
+      body = [h('p.label.sage', {}, store.trial ? trialName(store.trial) : ''),
         h('p.reading', {}, done
           ? 'This keeps the result in your history and frees you to test something else.'
           : 'Ending early keeps what you’ve logged, but a shorter trial can say much less. The result is saved in your history either way.'),
@@ -865,7 +1265,7 @@ function sheet() {
     }
     default: return null;
   }
-  const panel = h('div.sheet', { role: 'dialog', 'aria-modal': 'true', 'aria-label': title, onclick: (e) => e.stopPropagation() },
+  const panel = h('div.sheet', { role: 'dialog', 'aria-modal': 'true', 'aria-label': title, tabindex: '-1', onclick: (e) => e.stopPropagation() },
     h('div.sheet-head', {}, h('h2', {}, title), h('button.link', { onclick: closeSheet }, 'Done')),
     h('div.stack', {}, body));
   return h('div.sheet-backdrop', { onclick: closeSheet }, panel);
@@ -906,7 +1306,7 @@ async function seedDemo() {
   p.profile.completedOnboarding = true;
   p.baselineStartedOn ??= new Date(Date.now() - 120 * 86400000).toISOString();
   p.trials = p.trials.filter((t) => t.finishedOn);
-  await store.startTrial({ intervention: LIBRARY[4], outcomeId: 'pain.intensity-nrs-11', note: 'Heat pad, 20 minutes each evening' });
+  await store.startTrial({ intervention: LIBRARY[4], outcomeId: PAIN_ID, note: 'Heat pad, 20 minutes each evening' });
   const r = store.running;
   const start = new Date(); start.setDate(start.getDate() - 96); start.setHours(0, 0, 0, 0);
   r.trial.startDate = start.toISOString();
@@ -929,7 +1329,7 @@ const TABS = [
   ['today', 'Today', 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z M12 2.75v2 M12 19.25v2 M2.75 12h2 M19.25 12h2 M5.46 5.46l1.41 1.41 M17.13 17.13l1.41 1.41 M5.46 18.54l1.41-1.41 M17.13 6.87l1.41-1.41'],
   ['trial', 'Trial', 'M5.5 3.25h5 M6.75 3.25v13.5a1.25 1.25 0 0 0 2.5 0V3.25 M6.75 10h2.5 M13.5 3.25h5 M14.75 3.25v13.5a1.25 1.25 0 0 0 2.5 0V3.25 M14.75 13h2.5'],
   ['result', 'Result', 'M4 3.5v16.5h16.5 M7.5 15.5l3.5-4.25 3 2.5 5.25-6.5'],
-  ['practice', 'Practice', 'M5 19.5c0-8.5 5-14.5 14.5-14.5 0 9.5-6 14.5-14.5 14.5z M5 19.5l8.5-8.5'],
+  ['practice', 'Learn', 'M5 19.5c0-8.5 5-14.5 14.5-14.5 0 9.5-6 14.5-14.5 14.5z M5 19.5l8.5-8.5'],
   ['more', 'More', 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M7.75 12h.01 M12 12h.01 M16.25 12h.01'],
 ];
 
@@ -940,6 +1340,8 @@ function tabbar() {
         s('path', { d }), id === 'more' && s('path', { d: 'M7.75 12h.01 M12 12h.01 M16.25 12h.01', 'stroke-width': 2.6 })),
       label)));
 }
+
+let lastOpened = null;
 
 function render() {
   const y = window.scrollY;
@@ -957,16 +1359,29 @@ function render() {
   if (ui.sheet && store.person) kids.push(sheet());
   root.replaceChildren(...kids);
   document.body.style.overflow = ui.sheet ? 'hidden' : '';
+  // With a sheet open, the screen behind it is out of reach for keyboards and screen
+  // readers, and focus moves into the sheet when it first opens.
+  for (const el of root.children) el.inert = !!ui.sheet && !el.classList.contains('sheet-backdrop');
+  const opened = ui.sheet ? `${ui.sheet.kind}:${ui.sheet.view ?? ''}` : null;
+  if (opened && opened !== lastOpened && !focusedName) root.querySelector('.sheet')?.focus();
+  lastOpened = opened;
   window.scrollTo(0, y);
   const panel = root.querySelector('.sheet');
   if (panel) panel.scrollTop = sheetY;
   if (focusedName) root.querySelector(`[placeholder="${CSS.escape(focusedName)}"]`)?.focus();
 }
 
-// A new day can begin while the app sits open.
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ui.sheet) closeSheet(); });
+
+// A new day can begin while the app sits open: on return to it, and at midnight.
+function atMidnight() {
+  const next = new Date(); next.setHours(24, 0, 5, 0);
+  setTimeout(() => { lastDay = new Date().toDateString(); ui.flareMore = false; render(); atMidnight(); }, next - new Date());
+}
 let lastDay = new Date().toDateString();
+atMidnight();
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && new Date().toDateString() !== lastDay) { lastDay = new Date().toDateString(); render(); }
+  if (document.visibilityState === 'visible' && new Date().toDateString() !== lastDay) { lastDay = new Date().toDateString(); ui.flareMore = false; render(); }
 });
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render());

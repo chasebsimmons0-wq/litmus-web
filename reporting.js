@@ -1,7 +1,7 @@
 // Plain-language and clinician text. A port of PainCore/Reporting.swift; the wording
 // is the same so the two apps never describe one result differently.
 
-import { detectableEffect } from './engine.js';
+import { detectableEffect, PAIN_ID, TRIAL_DEFAULTS, trialLength } from './engine.js';
 
 const f = (x, places = 1) => (Number.isFinite(x) ? x.toFixed(places) : '—');
 const pct = (x) => (Number.isFinite(x) ? `${Math.round(x * 100)}%` : '—');
@@ -20,10 +20,57 @@ export function plan(sd, rho, target, outcome, washoutDays = 3, maximumDays = 14
       else if (detectable <= target && total < best.totalDays) best = c;
     }
   }
-  return best ?? { blockCount: 10, blockDays: 7, washoutDays, detectable: Infinity, totalDays: 97 };
+  return best ?? { ...TRIAL_DEFAULTS, washoutDays, detectable: Infinity, totalDays: trialLength({ ...TRIAL_DEFAULTS, washoutDays }) };
+}
+
+function comparisonHeadline(a) {
+  const B = a.trial.conditionB.displayName, A = a.trial.conditionA.displayName;
+  const magnitude = f(Math.abs(a.effect));
+  const [low, high] = bounds(a);
+  const v = a.verdict;
+  const lower = a.effect < 0 ? 'lower' : 'higher';
+  if (v.kind === 'meaningful') {
+    const winner = v.direction === 'improved' ? B : A;
+    return `Your scores were about ${magnitude} points ${lower} in ${B} weeks than in ${A} weeks. Taking the day-to-day noise into account, the real difference is somewhere between roughly ${low} and ${high} points — so ${winner} looks genuinely better for you, not by chance.`;
+  }
+  if (v.kind === 'probable') {
+    return `Your scores were about ${magnitude} points ${lower} in ${B} weeks than in ${A} weeks, and the comparison points the same way throughout. How big the difference is remains uncertain — anywhere from ${low} to ${high} points — so it may be one you’d clearly notice, or one too small to feel.`;
+  }
+  if (v.kind === 'null') {
+    return `There’s no meaningful difference between ${B} and ${A} for you. The trial was long enough to have picked up a difference worth noticing, and it didn’t — on this measure, they look about the same.`;
+  }
+  return "This comparison can't answer the question yet. " + explain(a);
+}
+
+// The interval's two ends as sizes, smaller first, whichever way the effect points.
+function bounds(a) {
+  const [x, y] = [Math.abs(a.low), Math.abs(a.high)];
+  return [f(Math.min(x, y)), f(Math.max(x, y))];
+}
+
+// For measures other than pain (sleep, where higher is better; interference), the
+// wording names the measure and takes its direction from the sign of the effect.
+function otherOutcomeHeadline(a) {
+  const name = a.outcome.displayName.toLowerCase();
+  const magnitude = f(Math.abs(a.effect));
+  const [low, high] = bounds(a);
+  const word = a.effect < 0 ? 'lower' : 'higher';
+  const v = a.verdict;
+  if (v.kind === 'meaningful') {
+    return `Your ${name} scores were about ${magnitude} points ${word} while you were doing this. Taking the day-to-day noise into account, the real effect is somewhere between roughly ${low} and ${high} points — so this looks like a genuine ${v.direction === 'improved' ? 'improvement' : 'worsening'}, not chance.`;
+  }
+  if (v.kind === 'probable') {
+    return `Something did change: your ${name} scores were about ${magnitude} points ${word} while you were doing this, and the comparison points the same way throughout. What's less settled is how much — the real effect could be anywhere from ${low} to ${high} points.`;
+  }
+  if (v.kind === 'null') {
+    return `This one doesn't appear to be changing your ${name}. The trial was long enough and your logging complete enough to have picked up a change worth noticing, and it didn't find one. That's a real result — it rules something out.`;
+  }
+  return "This trial can't answer the question. " + explain(a);
 }
 
 export function headline(a) {
+  if (a.trial.design === 'alternatingTreatments') return comparisonHeadline(a);
+  if (a.outcome.id && a.outcome.id !== PAIN_ID) return otherOutcomeHeadline(a);
   const magnitude = f(Math.abs(a.effect));
   const low = f(Math.abs(a.high));
   const high = f(Math.abs(a.low));
@@ -81,7 +128,7 @@ export function rerunSuggestion(a) {
       return 'Keep logging — the trial can still finish as planned.';
     case 'underpowered':
       if (!(p.detectable <= a.thresholds.important)) {
-        return "Your scores move enough day to day that no trial of a reasonable length would settle this one. That isn't a failure on your part — it means this question can't be answered by measuring daily pain alone. A different outcome measure, or a bigger intervention, would be the way in.";
+        return `Your scores move enough day to day that no trial of a reasonable length would settle this one. That isn't a failure on your part — it means this question can't be answered by measuring ${a.outcome.displayName.toLowerCase()} alone. A different measure, or a different question to test, would be the way in.`;
       }
       return `Based on how much your scores moved, ${suggested} would give this a fair chance of showing an effect of the size that would matter.`;
     case 'entangledWithOtherTrial':
@@ -111,6 +158,19 @@ export function describeThreat(t) {
   }
 }
 
+// What the interval excludes, stated against the minimal important difference.
+function ruledOut(a) {
+  if (!Number.isFinite(a.low) || !Number.isFinite(a.high) || a.trial.design === 'alternatingTreatments') return [];
+  const mid = a.thresholds.important;
+  const lower = a.outcome.lowerIsBetter;
+  const out = [];
+  const benefitExcluded = lower ? a.low > -mid : a.high < mid;
+  const harmExcluded = lower ? a.high < mid : a.low > -mid;
+  if (benefitExcluded) out.push(`an improvement of ${f(mid)} points or more`);
+  if (harmExcluded) out.push(`a worsening of ${f(mid)} points or more`);
+  return out;
+}
+
 function verdictLine(a) {
   const v = a.verdict;
   if (v.kind === 'meaningful') {
@@ -135,13 +195,16 @@ function verdictLine(a) {
   return 'Inconclusive — ' + short;
 }
 
-const dateText = (d) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+const dateText = (d) => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
-export function clinicianSummary(a, patientLabel) {
+export function clinicianSummary(a, patientLabel, finishedOn = null) {
   const trial = a.trial;
   const planned = Math.max(...trial.phases.map((p) => p.startDay + p.length));
   const start = new Date(trial.startDate);
-  const end = new Date(start); end.setDate(end.getDate() + planned - 1);
+  let end = new Date(start); end.setDate(end.getDate() + planned - 1);
+  // A trial ended early is described by the days it actually ran.
+  if (finishedOn && new Date(finishedOn) < end) end = new Date(finishedOn);
+  const ran = Math.round((end - start) / 86400000) + 1;
   const outcomeName = a.outcome.displayName.toLowerCase();
   const out = [];
   const name = (s) => (s === 'a' ? trial.conditionA.displayName : trial.conditionB.displayName);
@@ -150,7 +213,10 @@ export function clinicianSummary(a, patientLabel) {
   if (patientLabel) out.push(`Patient: ${patientLabel}`);
   out.push(`Prepared ${dateText(new Date())}`, '');
 
-  out.push('QUESTION', `Does ${trial.conditionB.displayName} change ${outcomeName}?`);
+  const comparison = trial.design === 'alternatingTreatments';
+  out.push('QUESTION', comparison
+    ? `Do ${trial.conditionB.displayName} and ${trial.conditionA.displayName} differ in their effect on ${outcomeName}?`
+    : `Does ${trial.conditionB.displayName} change ${outcomeName}?`);
   if (trial.userNote) out.push(`Patient description of what was done: ${trial.userNote}`);
   out.push('');
 
@@ -159,7 +225,9 @@ export function clinicianSummary(a, patientLabel) {
   const washouts = ordered.filter((p) => p.kind === 'washout').map((p) => p.length);
   const sequence = ordered.filter((p) => p.kind !== 'washout').map((p) => p.kind.toUpperCase()).join('-');
   const uniform = new Set(blocks).size === 1;
-  out.push('METHOD', 'Design: Withdrawal, alternating on/off blocks, single patient (n-of-1).');
+  out.push('METHOD', comparison
+    ? 'Design: Alternating treatments, two active conditions in alternating blocks, single patient (n-of-1).'
+    : 'Design: Withdrawal, alternating on/off blocks, single patient (n-of-1).');
   out.push(`${uniform ? `${blocks.length} blocks of ${blocks[0]} days` : `${blocks.length} blocks of ${blocks.join('/')} days`}. Washout between blocks: ${washouts[0] ?? 0} days, excluded from analysis.`);
   if (trial.allocation?.randomised && trial.allocation.seed != null) {
     out.push(`Block order randomised (balanced, maximum run of ${trial.allocation.maximumRun} consecutive same-condition blocks;`);
@@ -167,7 +235,7 @@ export function clinicianSummary(a, patientLabel) {
   } else {
     out.push(`Block order strictly alternating, not randomised: ${sequence}.`);
   }
-  out.push(`Period: ${dateText(start)} to ${dateText(end)} (${planned} days).`);
+  out.push(`Period: ${dateText(start)} to ${dateText(end)} (${ran < planned ? `${ran} of ${planned} planned days; ended early` : `${planned} days`}).`);
   out.push(`Outcome: ${a.outcome.displayName}, self-reported once daily.`);
   out.push('Point estimate: least-squares contrast of condition means adjusted for linear time trend.');
   if (a.method === 'pairedBlocks') {
@@ -188,7 +256,8 @@ export function clinicianSummary(a, patientLabel) {
 
   const row = (s) => `${name(s.label)}: ${s.loggedDays}/${s.plannedDays} days logged (${pct(1 - s.missingRate)}), mean ${f(s.meanScore)}, SD ${f(s.standardDeviation)}, flare days ${s.flareDays}.`;
   out.push('DATA COMPLETENESS', row(a.a), row(a.b), `Days used in analysis: ${a.analysedDays}.`);
-  if (a.b.adherentDays != null) out.push(`Self-reported adherence during intervention blocks: ${a.b.adherentDays}/${a.b.loggedDays} days.`);
+  if (a.b.adherentDays != null) out.push(`Self-reported adherence during ${trial.conditionB.displayName} blocks: ${a.b.adherentDays}/${a.b.loggedDays} days.`);
+  if (comparison && a.a.adherentDays != null) out.push(`Self-reported adherence during ${trial.conditionA.displayName} blocks: ${a.a.adherentDays}/${a.a.loggedDays} days.`);
   out.push('');
 
   out.push('RESULT');
@@ -202,7 +271,10 @@ export function clinicianSummary(a, patientLabel) {
   } else {
     out.push('No estimate produced — insufficient data.');
   }
-  out.push('', `INTERPRETATION: ${verdictLine(a)}`, '');
+  out.push('', `INTERPRETATION: ${verdictLine(a)}`);
+  const ruled = ruledOut(a);
+  if (ruled.length) out.push(`RULED OUT (95% interval): ${ruled.join('; ')}.`);
+  out.push('');
 
   out.push('LIMITATIONS AND THREATS TO VALIDITY');
   out.push('- Unblinded single-patient design; expectancy effects are not controlled.');
