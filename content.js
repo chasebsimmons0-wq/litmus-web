@@ -192,3 +192,89 @@ export const PAIN_RAMP = [
   '#EFEAE0', '#EDE3D5', '#EBDCC9', '#E8D3BB', '#E4C9AC', '#DFBE9C',
   '#D9B28B', '#D2A47A', '#C99569', '#BF8558', '#B37447',
 ];
+
+// Pain education, in the same voice as the rest of the app: explaining, never
+// treating. Each lesson is short enough to read on a bad day. Sources are named so a
+// reader (or a clinician) can check them.
+export const LESSONS = [
+  {
+    id: 'lesson.pain-is-real', title: 'Your pain is real, and it’s made by your nervous system', minutes: 2,
+    paras: [
+      'Pain isn’t a reading taken from your tissues. It’s something your brain and nervous system produce, as a protective alarm, from everything they know: signals from the body, but also past experience, stress, sleep and what you expect to happen.',
+      'That doesn’t make it imagined. All pain works this way — a broken bone too. It means the alarm can be turned up or down by more than just what’s happening in the tissue.',
+      'This is also why two people with the same scan can hurt very differently, and why the same movement can hurt more on a stressed, sleepless week.',
+    ],
+    source: 'International Association for the Study of Pain, revised definition of pain (2020)',
+  },
+  {
+    id: 'lesson.sensitisation', title: 'Why pain can outlast an injury', minutes: 3,
+    paras: [
+      'Most tissues heal within weeks or months. When pain carries on much longer, the nervous system itself has often become more sensitive: the alarm goes off sooner, louder, and over a wider area than it used to.',
+      'Researchers call this sensitisation. A useful picture is a volume knob that’s been turned up. The pain is fully real; it has simply stopped being a reliable measure of damage.',
+      'The hopeful part is that sensitivity can change in both directions. Sleep, stress, activity and understanding all nudge the volume — which is exactly why testing one of them at a time can be worthwhile.',
+    ],
+    source: 'Reviews of central sensitisation in chronic pain; NICE guideline NG193 (2021)',
+  },
+  {
+    id: 'lesson.hurt-harm', title: 'Hurt doesn’t always mean harm', minutes: 2,
+    paras: [
+      'In long-standing pain, a flare during or after activity usually means the alarm is sensitive, not that you’ve done new damage. That distinction matters, because avoiding everything that hurts tends to shrink life faster than it protects the body.',
+      'It doesn’t mean pushing through everything. New or different pain, pain after a fall, or any of the warning signs from the safety check should be looked at by a clinician.',
+      'If you’re unsure whether a particular movement is safe for you, that’s a good question to bring to a physio or doctor.',
+    ],
+    source: 'Pain neuroscience education literature; reviews of fear-avoidance in chronic pain',
+  },
+  {
+    id: 'lesson.pacing', title: 'Pacing: steady beats boom and bust', minutes: 3,
+    paras: [
+      'On a good day it’s natural to catch up on everything. Then comes the crash, a few days of recovery, and the cycle repeats. Over months, the good days often get fewer.',
+      'Pacing means doing roughly the same amount on good days and bad: finding a level you can manage even on a harder day, splitting tasks up, and building up slowly from there.',
+      'It’s widely taught and many people find it helps, though the research is thinner than its popularity suggests. That makes it a good candidate to test for yourself.',
+    ],
+    source: 'Systematic reviews of activity pacing in chronic pain',
+  },
+  {
+    id: 'lesson.flares', title: 'Planning for a flare', minutes: 2,
+    paras: [
+      'Flares are part of living with chronic pain, not a sign that everything has failed. They are also when it’s hardest to think clearly, so the best time to plan for one is on a calmer day.',
+      'A flare plan is a short note to your future self: the early signs, what usually helps, what you can safely drop for a few days, and who to tell.',
+      'You can write yours below. On a day you mark as a flare, Litmus will show it to you.',
+    ],
+    source: 'Self-management guidance used in pain services',
+    action: 'flarePlan',
+  },
+  {
+    id: 'lesson.sleep', title: 'Sleep and pain feed each other', minutes: 2,
+    paras: [
+      'Pain makes sleep harder, and a poor night makes the next day’s pain worse. Studies that follow people day by day find the second link is often the stronger one.',
+      'Regular sleep and wake times are one of the simplest things to change, and one you can test here. Sleep-focused treatment tends to improve sleep clearly and pain more modestly.',
+    ],
+    source: 'Reviews of sleep and pain in chronic pain populations',
+  },
+  {
+    id: 'lesson.not-settled', title: 'Why a result can come back “not settled”', minutes: 3,
+    paras: [
+      'Pain moves around a lot from day to day on its own. To say something changed it, Litmus has to see a difference bigger than that ordinary movement — and see it again and again across the on and off weeks.',
+      'When a trial says “not settled”, it isn’t a failure. It means the honest answer is “we can’t tell yet”: too few days, a flare that landed unevenly, or an effect too small to separate from the noise.',
+      'A confident wrong answer would be worse. Telling you something didn’t work when it did could lead you to drop something that helps. The result screen always says what a cleaner re-run would look like.',
+    ],
+    source: 'How the n-of-1 analysis in this app works',
+  },
+  {
+    id: 'lesson.appointments', title: 'Getting more from a short appointment', minutes: 2,
+    paras: [
+      'Appointments are short, and it’s easy to forget the one thing you meant to say. Bringing a written summary lets a clinician see months of history in a couple of minutes.',
+      'Your care record collects what you’ve reported, what you’ve tested and what it showed, your medications, and questions to raise. Add your own questions as they come to you.',
+    ],
+    source: 'Patient-held records and question prompt lists in chronic illness care',
+    action: 'record',
+  },
+];
+
+// Routes to people, not just pages. Crisis lines live beside these in the app.
+export const SUPPORT = [
+  ['Your GP or family doctor', 'A good first stop, and the usual route to a specialist pain service or physiotherapy.'],
+  ['Pain BC (Canada)', 'painbc.ca — education, a coaching phone line and peer support.', 'https://painbc.ca'],
+  ['U.S. Pain Foundation', 'uspainfoundation.org — support groups and resources.', 'https://uspainfoundation.org'],
+  ['Pain Concern (UK)', 'painconcern.org.uk — a helpline and information.', 'https://painconcern.org.uk'],
+];

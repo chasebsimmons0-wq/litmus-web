@@ -20,6 +20,11 @@ account. It is a stopgap, not a second product.
 - A daily reminder, added to the phone's calendar as a repeating event with an alert
 - A warm welcome back after a gap, with nothing to catch up on
 - Crisis interception: a note that reads like a crisis brings up where to get help
+- A care record: one page for any clinician covering the pain, everything tested and
+  what it showed, what was tried before, medications, and questions to raise
+- Learn: eight short lessons on how pain works, a flare plan shown on flare days, and
+  routes to human support
+- A private journal, kept out of trials and out of the care record
 
 It doesn't have HealthKit step counts or push notifications. A web app can't read
 Health, and on iOS it can't schedule a notification without a server, which is why the
@@ -36,6 +41,7 @@ reminder lives in the calendar instead.
 | `store.js` | IndexedDB storage and export/import (`litmus.export.v3`) |
 | `reminders.js` | the calendar (`.ics`) file behind the daily reminder |
 | `safety.js` | the crisis-language check on free text |
+| `record.js` | the care record and its questions for the clinician |
 | `app.js` | the screens |
 | `sw.js` | offline shell, network first |
 
@@ -71,6 +77,10 @@ Settings → Pages → Source: **GitHub Actions**; the site is then at
 Home Screen.
 
 ## Data
+
+Backups use the same `litmus.export.v3` file as the iPhone app. The journal, flare plan
+and appointment questions are extra keys (`journal`, `flarePlan`,
+`appointmentQuestions`) that only the web app reads so far.
 
 Data lives in IndexedDB for the site's origin, on that device only. An app installed to
 the home screen keeps its data more reliably than a Safari tab, but browsers can still

@@ -55,7 +55,7 @@ test('a demo trial shows its result, with no errors on the way', async () => {
 
 test('the daily reminder downloads a repeating calendar event', async () => {
   const { page, errors } = await freshPage();
-  await page.getByRole('button', { name: 'More' }).click();
+  await page.getByRole('button', { name: 'More', exact: true }).click();
   await page.getByRole('button', { name: /Daily reminder/ }).click();
   await page.getByLabel('Reminder 1').fill('07:45');
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Add to calendar' }).click()]);
@@ -69,7 +69,7 @@ test('the daily reminder downloads a repeating calendar event', async () => {
 
 test('crisis language in a note brings up where to get help', async () => {
   const { page, errors } = await freshPage();
-  await page.getByRole('button', { name: 'More' }).click();
+  await page.getByRole('button', { name: 'More', exact: true }).click();
   await page.getByRole('button', { name: /^Medications/ }).click();
   await page.getByRole('button', { name: 'Add a medication' }).click();
   await page.getByPlaceholder('Name').fill('Amitriptyline');
@@ -78,5 +78,40 @@ test('crisis language in a note brings up where to get help', async () => {
   const sheet = page.getByRole('dialog', { name: /carry this alone/ });
   await sheet.waitFor();
   assert.match(await sheet.innerText(), /988/);
+  assert.deepEqual(errors, []);
+});
+
+test('the care record gathers the trial, and questions can be added', async () => {
+  const { page, errors } = await freshPage();
+  await page.getByRole('button', { name: 'More', exact: true }).click();
+  await page.getByRole('button', { name: /Care record for appointments/ }).click();
+  const sheet = page.getByRole('dialog', { name: 'Care record' });
+  await sheet.getByPlaceholder('A question of your own').fill('Could I see a pain specialist?');
+  await sheet.getByRole('button', { name: 'Add' }).click();
+  await sheet.getByText('Could I see a pain specialist?', { exact: true }).waitFor();
+  const text = await page.getByRole('dialog', { name: 'Care record' }).locator('pre').innerText();
+  assert.match(text, /PAIN RECORD/);
+  assert.match(text, /- Heat: running now/);
+  assert.match(text, /1\. Could I see a pain specialist\?/);
+  assert.deepEqual(errors, []);
+});
+
+test('lessons, the flare plan and the journal', async () => {
+  const { page, errors } = await freshPage();
+  await page.getByRole('button', { name: 'Learn' }).click();
+  await page.getByRole('button', { name: /Planning for a flare/ }).click();
+  await page.getByRole('button', { name: 'Write my flare plan' }).click();
+  const helps = page.getByLabel('What usually helps');
+  await helps.fill('Heat and lying on my side');
+  await helps.blur();
+  await page.getByRole('button', { name: 'Done' }).click();
+  assert.match(await page.locator('main').innerText(), /Written and ready/);
+
+  await page.getByRole('button', { name: 'More', exact: true }).click();
+  await page.getByRole('button', { name: /^Journal/ }).click();
+  await page.getByPlaceholder('Whatever’s on your mind').fill('A slow start, then a decent afternoon.');
+  await page.getByRole('button', { name: 'Save entry' }).click();
+  await page.getByText('A slow start, then a decent afternoon.', { exact: true }).waitFor();
+  assert.match(await page.getByRole('dialog', { name: 'Journal' }).innerText(), /decent afternoon/);
   assert.deepEqual(errors, []);
 });

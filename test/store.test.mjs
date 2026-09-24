@@ -19,3 +19,17 @@ test('days since the last score counts the baseline and every trial', () => {
   store.person.trials[0].entries.push(entry(8));
   assert.equal(store.daysSinceLastLog, 0);
 });
+
+test('journal, flare plan and questions travel in the export', () => {
+  const store = new Store();
+  store.person = {
+    name: 'Sam', profile: { sites: [] }, baselineStartedOn: null, baseline: [], trials: [], symptoms: [], symptomScores: {}, medications: [],
+    journal: [{ id: 'A', date: '2026-09-24T10:00:00Z', text: 'Better morning' }],
+    flarePlan: { helps: 'Heat' }, questions: [{ id: 'B', text: 'Referral?' }],
+  };
+  const data = JSON.parse(store.exportText());
+  assert.equal(data.schema, 'litmus.export.v3');
+  assert.deepEqual(data.journal, store.person.journal);
+  assert.deepEqual(data.flarePlan, { helps: 'Heat' });
+  assert.deepEqual(data.appointmentQuestions, [{ id: 'B', text: 'Referral?' }]);
+});

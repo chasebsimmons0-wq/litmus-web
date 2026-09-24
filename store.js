@@ -101,6 +101,7 @@ export class Store {
       id: crypto.randomUUID(), name: chosen, createdAt: now, updatedAt: now,
       profile: emptyProfile(), baselineStartedOn: null, baseline: [], trials: [],
       symptoms: [], symptomScores: {}, medications: [], lastBackupAt: null,
+      journal: [], flarePlan: {}, questions: [],
     };
     this.people.push(person);
     this.use(person, false);
@@ -137,6 +138,9 @@ export class Store {
     p.symptoms = [];
     p.symptomScores = {};
     p.medications = [];
+    p.journal = [];
+    p.flarePlan = {};
+    p.questions = [];
     await this.save();
   }
 
@@ -396,6 +400,61 @@ export class Store {
     return last ? daysBetween(last) : null;
   }
 
+  /** Pain over the last `window` days: mean, days logged and flare days. */
+  recentPain(window = 28) {
+    const p = this.person;
+    const cutoff = startOfDay(); cutoff.setDate(cutoff.getDate() - (window - 1));
+    const byDay = new Map();
+    const at = (start, day) => { const d = startOfDay(new Date(start)); d.setDate(d.getDate() + day); return d; };
+    const see = (start, entries) => {
+      for (const e of entries) { const d = at(start, e.day); if (d >= cutoff) byDay.set(dayKey(d), e); }
+    };
+    if (p?.baselineStartedOn) see(p.baselineStartedOn, p.baseline);
+    for (const r of p?.trials ?? []) if (r.trial.outcomeId === PAIN) see(r.trial.startDate, r.entries);
+    const days = [...byDay.values()];
+    return {
+      window, days: days.length, flareDays: days.filter((e) => e.isFlare).length,
+      mean: days.length ? days.reduce((x, e) => x + e.score, 0) / days.length : null,
+    };
+  }
+
+  // Journal, flare plan and appointment questions — the person's own words
+
+  get journal() { return (this.person?.journal ?? []).slice().sort((a, b) => b.date.localeCompare(a.date)); }
+
+  async addJournalEntry(text) {
+    const t = text.trim();
+    if (!t) return;
+    this.person.journal.push({ id: crypto.randomUUID().toUpperCase(), date: isoDate(new Date()), text: t });
+    await this.save();
+  }
+
+  async deleteJournalEntry(id) {
+    this.person.journal = this.person.journal.filter((x) => x.id !== id);
+    await this.save();
+  }
+
+  get flarePlan() { return this.person?.flarePlan ?? {}; }
+
+  async setFlarePlan(field, text) {
+    this.person.flarePlan = { ...this.person.flarePlan, [field]: text.trim() || undefined };
+    await this.save();
+  }
+
+  get questions() { return this.person?.questions ?? []; }
+
+  async addQuestion(text) {
+    const t = text.trim();
+    if (!t) return;
+    this.person.questions.push({ id: crypto.randomUUID().toUpperCase(), text: t });
+    await this.save();
+  }
+
+  async removeQuestion(id) {
+    this.person.questions = this.person.questions.filter((x) => x.id !== id);
+    await this.save();
+  }
+
   // Medications — tracked, never tested
 
   get medications() {
@@ -478,6 +537,10 @@ export class Store {
         for (const k of ['dose', 'stoppedOn', 'note']) if (m[k]) row[k] = m[k];
         return row;
       }),
+      // Web-only so far. Readers that don't know these keys ignore them.
+      journal: p.journal,
+      flarePlan: p.flarePlan,
+      appointmentQuestions: p.questions,
     };
     if (this.activeRecords[0]) root.currentTrial = toNativeTrial(this.activeRecords[0].trial, 'running');
     // Seeds are 64-bit. They travel as strings inside JavaScript and are written back
@@ -531,6 +594,9 @@ export class Store {
     person.symptoms = symptoms;
     person.symptomScores = symptomScores;
     person.medications = medications;
+    person.journal = Array.isArray(data.journal) ? data.journal.filter((x) => x?.text && x?.date) : [];
+    person.flarePlan = data.flarePlan && typeof data.flarePlan === 'object' ? data.flarePlan : {};
+    person.questions = Array.isArray(data.appointmentQuestions) ? data.appointmentQuestions.filter((x) => x?.text) : [];
     await this.save(person);
     return person.name;
   }
@@ -542,6 +608,9 @@ function upgrade(p) {
   p.symptomScores ??= {};
   p.medications ??= [];
   p.lastBackupAt ??= null;
+  p.journal ??= [];
+  p.flarePlan ??= {};
+  p.questions ??= [];
   return p;
 }
 

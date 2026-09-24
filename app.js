@@ -4,8 +4,9 @@ import { OUTCOMES, detectableEffect, plannedDays, phaseOnDay, blockCountForOverl
 import { Store, daysBetween } from './store.js';
 import {
   SITES, QUALITIES, FACTORS, RED_FLAGS, DIAGNOSES, LIBRARY, PRACTICES, PAIN_RAMP,
-  suggestedOrder, customIntervention, NERVE_QUALITIES, widespreadFeatureCount,
+  suggestedOrder, customIntervention, NERVE_QUALITIES, widespreadFeatureCount, LESSONS, SUPPORT,
 } from './content.js';
+import { careRecord } from './record.js';
 import { headline, rerunSuggestion, describeThreat, clinicianSummary } from './reporting.js';
 import { COMMON_SYMPTOMS, dayKey, keyToDate, beforeAfter, BEFORE_AFTER_MINIMUM_DAYS } from './tracking.js';
 import { reminderCalendar, parseTime } from './reminders.js';
@@ -352,6 +353,7 @@ function todayTab() {
       if (logged) await store.setFlare(on);
       else { ui.pendingFlare = on; render(); }
     }));
+    if (flareOn) kids.push(flarePlanCard());
   }
 
   if (logged) {
@@ -615,6 +617,7 @@ function resultTab() {
       : header('No result yet', running ? 'Keep logging — the first comparison appears once a few weeks have finished.'
         : history.length ? 'Nothing running right now. Your earlier results are below.' : 'Results appear here once a trial is running.'),
     running && store.focusedIsFinished && h('button.btn.primary', { onclick: () => openSheet('endTrial') }, 'Close this trial and keep the result'),
+    (running || history.length > 0) && h('button.btn.outline', { onclick: () => openSheet('record') }, 'Care record for your next appointment'),
     history.length > 0 && h('div.stack.tight', {}, h('p.label', {}, 'Earlier trials'),
       history.map((r) => {
         const ra = store.analysis(r);
@@ -628,12 +631,66 @@ function resultTab() {
 // ── practice ─────────────────────────────────────────────────────────────────────
 
 function practiceTab() {
+  const planned = Object.values(store.flarePlan).some(Boolean);
   return h('div.stack', {},
-    header('Practice', 'Short guided pauses. The same every time, for when you need something to do with your attention.'),
+    header('Learn', 'How pain works, in short reads. Then a few guided pauses for the harder minutes.'),
+    h('div.stack.tight', {}, LESSONS.map((l) => h('button.check', { onclick: () => openSheet('lesson', { id: l.id }) },
+      h('div.grow', {}, h('div', { style: { fontSize: '16px' } }, l.title), h('p.caption', {}, `${l.minutes} min read`)),
+      h('span.muted', {}, '›')))),
+    card('sage', h('p.label', {}, 'Your flare plan'),
+      h('p.body', {}, planned ? 'Written and ready. It appears on Today whenever you mark a flare.' : 'A short note to yourself for the hard days, written on an easier one.'),
+      h('button.btn.outline', { onclick: () => openSheet('flarePlan') }, planned ? 'Look at it' : 'Write it')),
+    h('p.label', {}, 'Practice'),
     PRACTICES.map((p) => card('',
       h('div.row.between', {}, h('h2', { style: { margin: 0, fontSize: '18px', fontWeight: 600 } }, p.title), h('span.caption', {}, p.subtitle)),
       h('p.body', {}, p.note),
-      h('button.btn.primary', { onclick: () => play(p) }, 'Begin'))));
+      h('button.btn.primary', { onclick: () => play(p) }, 'Begin'))),
+    card('', h('p.label', {}, 'People who can help'),
+      SUPPORT.map(([name, text, href]) => h('div', {},
+        h('div', { style: { fontWeight: 500 } }, href ? h('a', { href, target: '_blank', rel: 'noopener' }, name) : name),
+        h('p.caption', {}, text))),
+      h('p.caption', {}, 'If things feel unbearable right now:'),
+      ...crisisLinks()));
+}
+
+function lessonSheet(id) {
+  const l = LESSONS.find((x) => x.id === id);
+  if (!l) return [];
+  return [
+    ...l.paras.map((t) => h('p.reading', {}, t)),
+    l.action === 'flarePlan' && h('button.btn.primary', { onclick: () => openSheet('flarePlan') }, 'Write my flare plan'),
+    l.action === 'record' && h('button.btn.primary', { onclick: () => openSheet('record') }, 'Open my care record'),
+    h('p.caption', {}, `Source: ${l.source}. General education, not advice about your own care.`),
+  ];
+}
+
+const FLARE_FIELDS = [
+  ['signs', 'Early signs a flare is starting', 'e.g. stiffer in the morning, sleep slipping'],
+  ['helps', 'What usually helps', 'e.g. heat, a short walk, lying on my side'],
+  ['drop', 'What I can safely drop for a few days', 'e.g. cooking from scratch, the gym'],
+  ['tell', 'Who to tell, and what I need from them', 'e.g. my partner — to take the school run'],
+];
+
+function flarePlanSheet() {
+  const plan = store.flarePlan;
+  return [
+    h('p.body', {}, 'Written on a calmer day, for a harder one. Keep it short — you’ll be reading it when thinking is difficult.'),
+    ...FLARE_FIELDS.map(([key, label, hint]) => {
+      const area = h('textarea.field', { placeholder: hint, rows: 2, 'aria-label': label }, plan[key] ?? '');
+      area.addEventListener('change', () => { checkForCrisis(area.value); store.setFlarePlan(key, area.value); });
+      return h('div.stack.tight', {}, h('p.label', {}, label), area);
+    }),
+    h('p.caption', {}, 'Saved as you go, on this device.'),
+  ];
+}
+
+function flarePlanCard() {
+  const plan = store.flarePlan;
+  const rows = FLARE_FIELDS.filter(([key]) => plan[key]);
+  if (!rows.length) return null;
+  return card('sage', h('p.label', {}, 'Your flare plan'),
+    rows.map(([key, label]) => h('div', {}, h('p.caption', {}, label), h('p.body', { style: { color: 'var(--ink)' } }, plan[key]))),
+    h('p.caption', {}, 'Be gentle with yourself today. A flare is a hard day, not a setback in the trial.'));
 }
 
 function play(p) {
@@ -767,6 +824,10 @@ function moreTab() {
       row('Symptoms you track', 'symptoms', store.trackedSymptoms.length ? store.trackedSymptoms.map((x) => x.name).join(', ') : null),
       row('Medications', 'medications', store.medications.length ? plural(store.medications.length, 'medication') : null),
       row('Daily reminder', 'reminders', savedReminderTimes()?.join(', ') ?? null)),
+    h('div.stack.tight', {},
+      h('p.label', {}, 'Yours'),
+      row('Care record for appointments', 'record', 'Everything tried and ruled out, on one page'),
+      row('Journal', 'journal', store.journal.length ? plural(store.journal.length, 'entry', 'entries') : 'Private, and never part of a trial')),
     card('', h('p.label', {}, 'Your data'),
       h('p.body', {}, 'Everything is stored in this browser on this device, and nowhere else. Back up regularly: if the phone is reset or lost, a backup is how you get your history back. It’s the same file the iPhone app reads, so it also moves you between the two.'),
       !standalone && h('p.caption', {}, 'Tip: in Safari, Share → Add to Home Screen. An installed web app keeps its data more reliably than a browser tab.'),
@@ -884,6 +945,55 @@ function medicationSheet(id) {
   ];
 }
 
+// ── journal and care record ──────────────────────────────────────────────────────
+
+function journalSheet() {
+  let draft = '';
+  const area = h('textarea.field', { placeholder: 'Whatever’s on your mind', rows: 4, oninput: (e) => { draft = e.target.value; } });
+  const entries = store.journal;
+  return [
+    h('p.body', {}, 'For anything the numbers can’t carry. It stays on this device, it’s never used in a trial, and it isn’t part of the care record.'),
+    area,
+    h('button.btn.primary', { onclick: async () => {
+      if (!draft.trim()) return;
+      checkForCrisis(draft);
+      await store.addJournalEntry(draft);
+    } }, 'Save entry'),
+    entries.length > 0 && h('div.stack.tight', {}, entries.map((x) => card('',
+      h('div.row.between', {}, h('p.caption', {}, new Date(x.date).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })),
+        h('button.link', { onclick: () => store.deleteJournalEntry(x.id) }, 'Delete')),
+      h('p.body', { style: { color: 'var(--ink)', whiteSpace: 'pre-wrap' } }, x.text)))),
+  ];
+}
+
+function recordText() {
+  const trials = store.person.trials.map((r) => ({ record: r, analysis: store.analysis(r), dayNow: r.finishedOn ? null : store.dayIn(r) }));
+  const pain = store.painByDay();
+  const medications = store.medications.map((m) => ({ ...m, comparison: beforeAfter(pain, m.startedOn, m.stoppedOn) }));
+  return careRecord({
+    name: store.person.name, profile: store.profile, trials, medications,
+    recent: store.recentPain(28), ownQuestions: store.questions.map((q) => q.text),
+  });
+}
+
+function recordSheet() {
+  const text = recordText();
+  let draft = '';
+  const field = h('input.field', { placeholder: 'A question of your own', oninput: (e) => { draft = e.target.value; } });
+  return [
+    h('p.body', {}, 'One page for a new specialist, a GP or a physio: what you’ve reported, what you’ve tested and what it showed, your medications, and questions to raise. Journal entries are never included.'),
+    card('', h('p.label', {}, 'Your questions'),
+      store.questions.map((q) => h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, q.text),
+        h('button.link', { onclick: () => store.removeQuestion(q.id) }, 'Remove'))),
+      h('div.row', {}, field, h('button.btn.outline', { style: { width: 'auto', padding: '0 18px' }, onclick: () => store.addQuestion(draft) }, 'Add')),
+      h('p.caption', {}, 'Yours come first. Litmus adds a few more from what you’ve logged — questions for the clinician, never advice.')),
+    card('', h('pre.pre', {}, text)),
+    h('button.btn.primary', { onclick: async () => {
+      try { if (navigator.share) await navigator.share({ title: 'Pain record', text }); else { await navigator.clipboard.writeText(text); toast('Copied.'); } } catch {}
+    } }, navigator.share ? 'Share' : 'Copy'),
+  ];
+}
+
 // ── sheets ───────────────────────────────────────────────────────────────────────
 
 function openSheet(kind, data = {}) { ui.sheet = { kind, ...data }; render(); }
@@ -898,6 +1008,10 @@ function sheet() {
     case 'symptoms': title = 'Symptoms'; body = symptomsSheet(); break;
     case 'medications': title = 'Medications'; body = medicationsSheet(); break;
     case 'reminders': title = 'Daily reminder'; body = remindersSheet(); break;
+    case 'lesson': title = LESSONS.find((x) => x.id === sh.id)?.title ?? 'Learn'; body = lessonSheet(sh.id); break;
+    case 'flarePlan': title = 'Flare plan'; body = flarePlanSheet(); break;
+    case 'journal': title = 'Journal'; body = journalSheet(); break;
+    case 'record': title = 'Care record'; body = recordSheet(); break;
     case 'support': title = 'You don’t have to carry this alone';
       body = [h('p.reading', {}, 'What you wrote sounds really hard. If you’re thinking about harming yourself or ending your life, please talk to someone now — they’re there for exactly this, any time of day.'),
         ...crisisLinks(),
@@ -998,7 +1112,7 @@ const TABS = [
   ['today', 'Today', 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z M12 2.75v2 M12 19.25v2 M2.75 12h2 M19.25 12h2 M5.46 5.46l1.41 1.41 M17.13 17.13l1.41 1.41 M5.46 18.54l1.41-1.41 M17.13 6.87l1.41-1.41'],
   ['trial', 'Trial', 'M5.5 3.25h5 M6.75 3.25v13.5a1.25 1.25 0 0 0 2.5 0V3.25 M6.75 10h2.5 M13.5 3.25h5 M14.75 3.25v13.5a1.25 1.25 0 0 0 2.5 0V3.25 M14.75 13h2.5'],
   ['result', 'Result', 'M4 3.5v16.5h16.5 M7.5 15.5l3.5-4.25 3 2.5 5.25-6.5'],
-  ['practice', 'Practice', 'M5 19.5c0-8.5 5-14.5 14.5-14.5 0 9.5-6 14.5-14.5 14.5z M5 19.5l8.5-8.5'],
+  ['practice', 'Learn', 'M5 19.5c0-8.5 5-14.5 14.5-14.5 0 9.5-6 14.5-14.5 14.5z M5 19.5l8.5-8.5'],
   ['more', 'More', 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M7.75 12h.01 M12 12h.01 M16.25 12h.01'],
 ];
 
