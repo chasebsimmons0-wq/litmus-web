@@ -25,6 +25,9 @@ account. It is a stopgap, not a second product.
 - Learn: eight short lessons on how pain works, a flare plan shown on flare days, and
   routes to human support
 - A private journal, kept out of trials and out of the care record
+- Comparisons: a trial can alternate two options instead of one option and usual care,
+  and the result says which did more, if either
+- Ember, the red panda guide, and matching app icons
 
 It doesn't have HealthKit step counts or push notifications. A web app can't read
 Health, and on iOS it can't schedule a notification without a server, which is why the
@@ -42,6 +45,7 @@ reminder lives in the calendar instead.
 | `reminders.js` | the calendar (`.ics`) file behind the daily reminder |
 | `safety.js` | the crisis-language check on free text |
 | `record.js` | the care record and its questions for the clinician |
+| `mascot.js` | Ember, drawn as inline SVG |
 | `app.js` | the screens |
 | `sw.js` | offline shell, network first |
 
@@ -80,7 +84,9 @@ Home Screen.
 
 Backups use the same `litmus.export.v3` file as the iPhone app. The journal, flare plan
 and appointment questions are extra keys (`journal`, `flarePlan`,
-`appointmentQuestions`) that only the web app reads so far.
+`appointmentQuestions`) that only the web app reads so far. A comparison trial is written
+with `design: "alternatingTreatments"`; the native app needs that design case before it
+can restore one.
 
 Data lives in IndexedDB for the site's origin, on that device only. An app installed to
 the home screen keeps its data more reliably than a Safari tab, but browsers can still

@@ -23,7 +23,28 @@ export function plan(sd, rho, target, outcome, washoutDays = 3, maximumDays = 14
   return best ?? { blockCount: 10, blockDays: 7, washoutDays, detectable: Infinity, totalDays: 97 };
 }
 
+function comparisonHeadline(a) {
+  const B = a.trial.conditionB.displayName, A = a.trial.conditionA.displayName;
+  const magnitude = f(Math.abs(a.effect));
+  const low = f(Math.abs(a.high));
+  const high = f(Math.abs(a.low));
+  const v = a.verdict;
+  const lower = a.effect < 0 ? 'lower' : 'higher';
+  if (v.kind === 'meaningful') {
+    const winner = v.direction === 'improved' ? B : A;
+    return `Your scores were about ${magnitude} points ${lower} in ${B} weeks than in ${A} weeks. Taking the day-to-day noise into account, the real difference is somewhere between roughly ${low} and ${high} points — so ${winner} looks genuinely better for you, not by chance.`;
+  }
+  if (v.kind === 'probable') {
+    return `Your scores were about ${magnitude} points ${lower} in ${B} weeks than in ${A} weeks, and the comparison points the same way throughout. How big the difference is remains uncertain — anywhere from ${low} to ${high} points — so it may be one you’d clearly notice, or one too small to feel.`;
+  }
+  if (v.kind === 'null') {
+    return `There’s no meaningful difference between ${B} and ${A} for you. The trial was long enough to have picked up a difference worth noticing, and it didn’t — on this measure, they look about the same.`;
+  }
+  return "This comparison can't answer the question yet. " + explain(a);
+}
+
 export function headline(a) {
+  if (a.trial.design === 'alternatingTreatments') return comparisonHeadline(a);
   const magnitude = f(Math.abs(a.effect));
   const low = f(Math.abs(a.high));
   const high = f(Math.abs(a.low));
@@ -150,7 +171,10 @@ export function clinicianSummary(a, patientLabel) {
   if (patientLabel) out.push(`Patient: ${patientLabel}`);
   out.push(`Prepared ${dateText(new Date())}`, '');
 
-  out.push('QUESTION', `Does ${trial.conditionB.displayName} change ${outcomeName}?`);
+  const comparison = trial.design === 'alternatingTreatments';
+  out.push('QUESTION', comparison
+    ? `Do ${trial.conditionB.displayName} and ${trial.conditionA.displayName} differ in their effect on ${outcomeName}?`
+    : `Does ${trial.conditionB.displayName} change ${outcomeName}?`);
   if (trial.userNote) out.push(`Patient description of what was done: ${trial.userNote}`);
   out.push('');
 
@@ -159,7 +183,9 @@ export function clinicianSummary(a, patientLabel) {
   const washouts = ordered.filter((p) => p.kind === 'washout').map((p) => p.length);
   const sequence = ordered.filter((p) => p.kind !== 'washout').map((p) => p.kind.toUpperCase()).join('-');
   const uniform = new Set(blocks).size === 1;
-  out.push('METHOD', 'Design: Withdrawal, alternating on/off blocks, single patient (n-of-1).');
+  out.push('METHOD', comparison
+    ? 'Design: Alternating treatments, two active conditions in alternating blocks, single patient (n-of-1).'
+    : 'Design: Withdrawal, alternating on/off blocks, single patient (n-of-1).');
   out.push(`${uniform ? `${blocks.length} blocks of ${blocks[0]} days` : `${blocks.length} blocks of ${blocks.join('/')} days`}. Washout between blocks: ${washouts[0] ?? 0} days, excluded from analysis.`);
   if (trial.allocation?.randomised && trial.allocation.seed != null) {
     out.push(`Block order randomised (balanced, maximum run of ${trial.allocation.maximumRun} consecutive same-condition blocks;`);

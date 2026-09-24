@@ -1,6 +1,6 @@
 // Litmus — web. The screens, built on the same engine as the native app.
 
-import { OUTCOMES, detectableEffect, plannedDays, phaseOnDay, blockCountForOverlaps } from './engine.js';
+import { OUTCOMES, detectableEffect, plannedDays, phaseOnDay, blockCountForOverlaps, isComparison, conditionFor } from './engine.js';
 import { Store, daysBetween } from './store.js';
 import {
   SITES, QUALITIES, FACTORS, RED_FLAGS, DIAGNOSES, LIBRARY, PRACTICES, PAIN_RAMP,
@@ -163,7 +163,7 @@ function trace(entries, trial, { today } = {}) {
 function traceLegend(trial) {
   return h('div.legend', {},
     trial && h('span', {}, h('i.swatch', { style: { background: 'var(--band-on)' } }), trial.conditionB.displayName),
-    trial && h('span', {}, h('i.swatch', { style: { background: 'var(--band-off)' } }), 'Off'),
+    trial && h('span', {}, h('i.swatch', { style: { background: 'var(--band-off)' } }), isComparison(trial) ? trial.conditionA.displayName : 'Off'),
     trial && h('span', {}, h('i.swatch', { style: { background: 'var(--band-wash)' } }), 'Between'),
     h('span.row', { style: { gap: '5px' } }, h('i.dot'), 'Flare'));
 }
@@ -321,10 +321,12 @@ function todayTab() {
   } else if (pools.length === 1) {
     const { record, day } = pools[0];
     const kind = phaseOnDay(record.trial, day).kind;
+    const doing = conditionFor(record.trial, kind);
     title = kind === 'washout' ? 'A quiet day between blocks.'
-      : kind === 'b' ? `A week on ${record.trial.conditionB.displayName}.` : 'An off week.';
-    lead = kind === 'washout' ? 'Carry on as you were.'
-      : kind === 'b' ? (record.trial.userNote || 'Do the thing you’re testing, as planned.') : 'Nothing to do differently.';
+      : doing ? `A week on ${doing.displayName}.` : 'An off week.';
+    lead = kind === 'washout' ? (isComparison(record.trial) ? 'Neither one today. Carry on as you were.' : 'Carry on as you were.')
+      : kind === 'b' ? (record.trial.userNote || 'Do the thing you’re testing, as planned.')
+      : doing ? `Do ${doing.displayName.toLowerCase()} this week, not ${record.trial.conditionB.displayName.toLowerCase()}.` : 'Nothing to do differently.';
   } else {
     title = `${pools.length} trials running`;
   }
@@ -348,7 +350,7 @@ function todayTab() {
   if (pools.length > 1) {
     kids.push(card('', pools.map(({ record, day }) => {
       const kind = phaseOnDay(record.trial, day).kind;
-      const what = kind === 'b' ? 'On' : kind === 'a' ? 'Off' : 'Between blocks';
+      const what = conditionFor(record.trial, kind)?.displayName ?? (kind === 'a' ? 'Off' : 'Between blocks');
       return h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, record.trial.conditionB.displayName),
         h('span.caption', {}, `${what} · day ${day + 1} of ${plannedDays(record.trial)}`));
     })));
@@ -369,10 +371,11 @@ function todayTab() {
     // sentence: "did you do your heat" reads badly, and custom names can be anything.
     for (const pool of store.trialsAskingAdherence) {
       const trial = pool.record.trial;
+      const doing = conditionFor(trial, phaseOnDay(trial, pool.day)?.kind);
       const answer = pool.list.find((e) => e.day === pool.day)?.adhered;
       kids.push(card('', h('p.label', {}, 'Did you do it today?'),
-        h('p.body', { style: { color: 'var(--ink)' } }, trial.conditionB.displayName),
-        trial.userNote && h('p.caption', {}, `Your plan: ${trial.userNote}`),
+        h('p.body', { style: { color: 'var(--ink)' } }, doing.displayName),
+        doing === trial.conditionB && trial.userNote && h('p.caption', {}, `Your plan: ${trial.userNote}`),
         h('div.row', {},
           h(`button.btn.outline${answer === true ? '.solid-on' : ''}`, { onclick: () => store.setAdherence(pool.record.id, true) }, 'Yes'),
           h(`button.btn.outline${answer === false ? '.solid-on' : ''}`, { onclick: () => store.setAdherence(pool.record.id, false) }, 'Not today')),
@@ -467,7 +470,8 @@ function trialTab() {
 
   return h('div.stack', {},
     trialSwitcher(),
-    header(trial.conditionB.displayName, `Testing its effect on ${OUTCOMES[trial.outcomeId].displayName.toLowerCase()}.`),
+    header(isComparison(trial) ? `${trial.conditionB.displayName} or ${trial.conditionA.displayName.toLowerCase()}?` : trial.conditionB.displayName,
+      isComparison(trial) ? `Comparing their effect on ${OUTCOMES[trial.outcomeId].displayName.toLowerCase()}.` : `Testing its effect on ${OUTCOMES[trial.outcomeId].displayName.toLowerCase()}.`),
     card('', h('div.row.between', {},
         h('div', {}, h('div.number', {}, elapsed), h('p.caption', {}, `of ${plannedDays(trial)} days`)),
         h('div', {}, h('div.number', {}, logged), h('p.caption', {}, 'logged')),
@@ -482,8 +486,9 @@ function trialTab() {
           height: '30px', borderRadius: '8px', display: 'grid', placeItems: 'center', fontSize: '11px', color: 'var(--ink-soft)',
           background: p.kind === 'b' ? 'var(--band-on)' : 'var(--band-off)',
           outline: now ? '2px solid var(--ink)' : 'none', opacity: past || now ? 1 : 0.55,
-        } }, p.kind === 'b' ? 'On' : 'Off');
+        } }, isComparison(trial) ? (p.kind === 'b' ? 'B' : 'A') : p.kind === 'b' ? 'On' : 'Off');
       })),
+      isComparison(trial) && h('p.caption', {}, `B is ${trial.conditionB.displayName.toLowerCase()}, A is ${trial.conditionA.displayName.toLowerCase()}.`),
       h('p.caption', {}, 'Randomised, so a good or bad stretch can’t line up with the thing being tested.')),
     a && a.verdict.reason !== 'insufficientData' && a.verdict.reason !== 'tooFewCompletedBlocks' && Number.isFinite(a.low) && card('sage',
       h('p.label.sage', {}, 'Precision so far'),
@@ -537,9 +542,13 @@ function setupSheet() {
   const overlaps = store.overlapsForNewTrial;
   const blocks = blockCountForOverlaps(overlaps);
   const total = blocks * 7 + (blocks - 1) * 3;
-  const st = ui.setup ??= { pick: menu[0]?.id ?? 'custom', custom: '', outcomeId: 'pain.intensity-nrs-11', note: '' };
+  const st = ui.setup ??= { pick: menu[0]?.id ?? 'custom', custom: '', outcomeId: 'pain.intensity-nrs-11', note: '', against: 'usual' };
   const sd = store.baselineVariability;
   const chosen = st.pick === 'custom' ? (st.custom.trim() ? customIntervention(st.custom.trim()) : null) : LIBRARY.find((i) => i.id === st.pick);
+  // Comparing with a second option instead of usual care. Only from the library, and
+  // never the same thing twice.
+  if (st.against === st.pick) st.against = 'usual';
+  const comparator = st.against === 'usual' ? null : menu.find((i) => i.id === st.against) ?? null;
   const outcome = OUTCOMES[st.outcomeId];
   const detect = detectableEffect(sd ?? 1.5, 0.5, blocks, 7, outcome, overlaps);
 
@@ -552,7 +561,7 @@ function setupSheet() {
   const noteField = h('textarea.field', { placeholder: 'What exactly will you do? e.g. “20 minutes of heat, evenings”', rows: 2, oninput: (e) => { st.note = e.target.value; } }, st.note);
   const start = h('button.btn.primary', { disabled: !chosen, onclick: async () => {
     const pick = st.pick === 'custom' ? customIntervention(st.custom.trim()) : chosen;
-    await store.startTrial({ intervention: pick, outcomeId: st.outcomeId, note: st.note.trim() || null });
+    await store.startTrial({ intervention: pick, comparator, outcomeId: st.outcomeId, note: st.note.trim() || null });
     ui.setup = null; ui.sheet = null; ui.tab = 'today'; render();
     toast('Trial started. Today is day 1.');
   } }, 'Start the trial today');
@@ -565,6 +574,12 @@ function setupSheet() {
       h(`button.check${st.pick === 'custom' ? '.on' : ''}`, { onclick: () => { st.pick = 'custom'; render(); } },
         h('span.box', {}, st.pick === 'custom' ? '✓' : ''), h('div', { style: { fontSize: '16px' } }, 'Something else')),
       st.pick === 'custom' && customField),
+    h('p.label', {}, 'Compared with'),
+    h('div.chips', {}, [['usual', 'Nothing different'], ...menu.filter((i) => i.id !== st.pick).map((i) => [i.id, i.displayName])]
+      .map(([id, label]) => h(`button.chip${st.against === id ? '.on' : ''}`, { 'aria-pressed': String(st.against === id), onclick: () => { st.against = id; render(); } }, label))),
+    h('p.caption', {}, comparator
+      ? `Weeks of ${chosen?.displayName.toLowerCase() ?? 'your choice'} alternate with weeks of ${comparator.displayName.toLowerCase()}, in a random order. The result says which did more for you, if either.`
+      : 'The usual test: weeks on, weeks off. Choose a second option instead to find out which of two things works better for you.'),
     h('p.label', {}, 'Measured by'),
     h('div.stack.tight', {}, Object.values(OUTCOMES).map((o) => h(`button.check${st.outcomeId === o.id ? '.on' : ''}`, { onclick: () => { st.outcomeId = o.id; render(); } },
       h('span.box', {}, st.outcomeId === o.id ? '✓' : ''), h('div', { style: { fontSize: '16px' } }, o.displayName)))),
@@ -573,7 +588,7 @@ function setupSheet() {
       h('p.body', {}, `${overlaps === 1 ? 'One trial is already running. Its' : `${overlaps} trials are already running. Their`} on and off weeks will be accounted for, but every trial running at once makes each answer less precise — this one and ${overlaps === 1 ? 'the one' : 'the ones'} already going. A real change becomes easier to miss, and if two things interact that can’t be untangled.`),
       blocks > 10 && h('p.caption', {}, `To make up for some of that, this trial alternates over ${blocks} weeks instead of the usual 10.`)),
     card('sage', h('p.label.sage', {}, 'What this trial can see'),
-      h('p.body', {}, `${blocks} alternating weeks, on and off in a random order, with 3 quiet days between each — ${total} days in all. ${sd != null ? 'With how much your scores move' : 'For typical day-to-day variation'}, it could reliably detect a change of about ${fmt(detect)} points${outcome.important != null ? `; a change worth caring about is around ${fmt(outcome.important, 0)}` : ''}.${outcome.important != null && detect > outcome.important ? ' A real change smaller than that could be missed — the result will say so if it is.' : ''}`),
+      h('p.body', {}, `${blocks} alternating weeks, ${comparator ? 'one then the other' : 'on and off'} in a random order, with 3 quiet days between each — ${total} days in all. ${sd != null ? 'With how much your scores move' : 'For typical day-to-day variation'}, it could reliably detect a change of about ${fmt(detect)} points${outcome.important != null ? `; a change worth caring about is around ${fmt(outcome.important, 0)}` : ''}.${outcome.important != null && detect > outcome.important ? ' A real change smaller than that could be missed — the result will say so if it is.' : ''}`),
       sd == null && h('p.caption', {}, 'Finish at least 10 baseline days and this becomes a number about you.')),
     start,
   ];
@@ -585,7 +600,13 @@ function resultBlock(a, record) {
   const trial = a.trial;
   const ready = !(a.verdict.kind === 'inconclusive' && ['insufficientData', 'tooFewCompletedBlocks'].includes(a.verdict.reason));
   const rerun = rerunSuggestion(a);
-  const title = {
+  const ahead = a.verdict.direction === 'improved' ? trial.conditionB.displayName : trial.conditionA.displayName;
+  const title = isComparison(trial) ? {
+    meaningful: `${ahead} came out ahead.`,
+    probable: `${ahead} edged ahead.`,
+    null: 'No meaningful difference.',
+    inconclusive: ready ? 'Not settled.' : 'Too early to say.',
+  }[a.verdict.kind] : {
     meaningful: a.verdict.direction === 'improved' ? 'This seems to help.' : 'This seems to make things worse.',
     probable: 'Something changed.',
     null: 'No meaningful effect.',
@@ -593,12 +614,14 @@ function resultBlock(a, record) {
   }[a.verdict.kind];
   const span = 5;
   const pos = (v) => `${Math.max(0, Math.min(100, ((v + span) / (2 * span)) * 100))}%`;
-  const better = a.outcome.lowerIsBetter ? 'Better' : 'Worse';
-  const worse = a.outcome.lowerIsBetter ? 'Worse' : 'Better';
+  // Left of centre is a lower score. In a comparison, name who that favours.
+  const [bName, aName] = [trial.conditionB.displayName, trial.conditionA.displayName];
+  const better = isComparison(trial) ? `${a.outcome.lowerIsBetter ? bName : aName} better` : a.outcome.lowerIsBetter ? 'Better' : 'Worse';
+  const worse = isComparison(trial) ? `${a.outcome.lowerIsBetter ? aName : bName} better` : a.outcome.lowerIsBetter ? 'Worse' : 'Better';
 
   return h('div.stack', {},
     h('div.row', {}, guide(a.verdict.kind === 'inconclusive' ? 'think' : 'main'),
-      h('p.label.sage', {}, trial.conditionB.displayName)),
+      h('p.label.sage', {}, isComparison(trial) ? `${trial.conditionB.displayName} vs ${trial.conditionA.displayName}` : trial.conditionB.displayName)),
     h('h1.display', {}, title),
     h('p.reading', {}, headline(a)),
     ready && Number.isFinite(a.low) && card('',
@@ -608,7 +631,7 @@ function resultBlock(a, record) {
         h('div', { style: { position: 'absolute', top: '10px', bottom: '10px', left: pos(-a.thresholds.trivial), width: `calc(${pos(a.thresholds.trivial)} - ${pos(-a.thresholds.trivial)})`, background: 'var(--band-wash)', borderRadius: '4px' } }),
         h('div', { style: { position: 'absolute', top: '14px', height: '12px', left: pos(a.low), width: `calc(${pos(a.high)} - ${pos(a.low)})`, background: 'var(--sage)', borderRadius: '6px', opacity: 0.55 } }),
         h('div', { style: { position: 'absolute', top: '10px', height: '20px', width: '3px', left: `calc(${pos(a.effect)} - 1px)`, background: 'var(--ink)', borderRadius: '2px' } })),
-      h('div.row.between.caption', {}, h('span', {}, `← ${better}`), h('span', {}, 'No change'), h('span', {}, `${worse} →`)),
+      h('div.row.between.caption', {}, h('span', {}, `← ${better}`), h('span', {}, isComparison(trial) ? 'No difference' : 'No change'), h('span', {}, `${worse} →`)),
       h('p.caption', {}, `Best estimate ${a.effect > 0 ? '+' : ''}${fmt(a.effect)} points; 95% range ${fmt(a.low)} to ${fmt(a.high)}. The shaded middle is too small to matter.`)),
     rerun && card('sage', h('p.label.sage', {}, 'Next'), h('p.body', {}, rerun)),
     card('', h('p.label', {}, 'Scores'), trace(record.entries, trial, { today: record.finishedOn ? null : store.currentDay }), traceLegend(trial)),

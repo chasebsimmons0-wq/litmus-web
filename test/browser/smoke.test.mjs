@@ -115,3 +115,16 @@ test('lessons, the flare plan and the journal', async () => {
   assert.match(await page.getByRole('dialog', { name: 'Journal' }).innerText(), /decent afternoon/);
   assert.deepEqual(errors, []);
 });
+
+test('a second trial can compare two options', async () => {
+  const { page, errors } = await freshPage();
+  await page.getByRole('button', { name: 'Trial', exact: true }).click();
+  await page.getByRole('button', { name: 'Start another trial alongside' }).click();
+  const sheet = page.getByRole('dialog');
+  await sheet.locator('button.chip', { hasText: 'Massage' }).click();
+  assert.match(await sheet.innerText(), /alternate with weeks of massage/);
+  await sheet.getByRole('button', { name: 'Start the trial today' }).click();
+  await page.getByRole('button', { name: 'Trial', exact: true }).click();
+  assert.match(await page.locator('main').innerText(), / or massage\?/);
+  assert.deepEqual(errors, []);
+});

@@ -4,7 +4,7 @@
 // ruled out?" It states what was reported and measured, and recommends nothing.
 
 import { SITES, QUALITIES, FACTORS, RED_FLAGS, LIBRARY, NERVE_QUALITIES } from './content.js';
-import { plannedDays } from './engine.js';
+import { plannedDays, isComparison } from './engine.js';
 
 const f = (x, p = 1) => (Number.isFinite(x) ? x.toFixed(p) : '—');
 const signed = (x) => (x > 0 ? '+' : x < 0 ? '−' : '') + f(Math.abs(x));
@@ -13,10 +13,20 @@ const labels = (pairs, ids) => ids.map((id) => pairs.find(([k]) => k === id)?.[1
 const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 const addDays = (iso, n) => { const d = new Date(iso); d.setDate(d.getDate() + n); return d; };
 
+const label = (t) => (isComparison(t) ? `${t.conditionB.displayName} compared with ${lower(t.conditionA.displayName)}` : t.conditionB.displayName);
+
 /** Plain-language verdict for one analysed trial, in a few words. */
 export function shortVerdict(a) {
   if (!a) return 'no days logged';
   const v = a.verdict;
+  if (a.trial && isComparison(a.trial)) {
+    const [B, A] = [a.trial.conditionB.displayName, a.trial.conditionA.displayName];
+    const ahead = v.direction === 'improved' ? B : A;
+    if (v.kind === 'meaningful') return `${ahead} clearly better`;
+    if (v.kind === 'probable') return `${ahead} somewhat better, size uncertain`;
+    if (v.kind === 'null') return 'no meaningful difference';
+    return 'not settled';
+  }
   if (v.kind === 'meaningful') return v.direction === 'improved' ? 'clear improvement' : 'clear worsening';
   if (v.kind === 'probable') return v.direction === 'improved' ? 'some improvement, size uncertain' : 'some worsening, size uncertain';
   if (v.kind === 'null') return 'no meaningful effect';
@@ -41,6 +51,14 @@ export function suggestedQuestions({ profile, trials = [], medications = [] }) {
     const name = record.trial.conditionB.displayName;
     const v = analysis?.verdict;
     if (!v) continue;
+    if (isComparison(record.trial)) {
+      const other = record.trial.conditionA.displayName;
+      if (v.kind === 'meaningful') {
+        const [win, lose] = v.direction === 'improved' ? [name, other] : [other, name];
+        out.push(`${win} worked measurably better for me than ${lower(lose)}. Is there a way to build on that?`);
+      } else if (v.kind === 'null') out.push(`${name} and ${lower(other)} made about the same difference for me. Does that change which is worth continuing?`);
+      continue;
+    }
     if (v.kind === 'meaningful' && v.direction === 'improved') out.push(`${name} measurably helped me. Is there a way to build on that?`);
     else if (v.kind === 'null') out.push(`${name} made no measurable difference for me. Is it still worth continuing?`);
     else if (v.kind === 'meaningful' && v.direction === 'worsened') out.push(`My pain was measurably worse with ${lower(name)}. Should I know anything about why?`);
@@ -97,11 +115,11 @@ export function careRecord({ name, profile, trials = [], medications = [], recen
       const t = record.trial;
       const end = addDays(t.startDate, plannedDays(t) - 1);
       const numbers = a && Number.isFinite(a.low) ? ` (${signed(a.effect)} points, 95% CI ${signed(a.low)} to ${signed(a.high)})` : '';
-      out.push(`- ${t.conditionB.displayName}, ${dateText(t.startDate)} to ${dateText(new Date(Math.min(end, new Date(record.finishedOn))))}: ${shortVerdict(a)}${numbers}. Outcome: ${a?.outcome.displayName.toLowerCase() ?? 'pain'}.`);
+      out.push(`- ${label(t)}, ${dateText(t.startDate)} to ${dateText(new Date(Math.min(end, new Date(record.finishedOn))))}: ${shortVerdict(a)}${numbers}. Outcome: ${a?.outcome.displayName.toLowerCase() ?? 'pain'}.`);
     }
     for (const { record, dayNow } of running) {
       const t = record.trial;
-      out.push(`- ${t.conditionB.displayName}: running now${dayNow != null ? `, day ${dayNow + 1} of ${plannedDays(t)}` : ''}.`);
+      out.push(`- ${label(t)}: running now${dayNow != null ? `, day ${dayNow + 1} of ${plannedDays(t)}` : ''}.`);
     }
     out.push('');
   }

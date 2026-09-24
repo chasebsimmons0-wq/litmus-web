@@ -4,7 +4,7 @@
 // their trials; days indexed from a start date; several readings a day folded into a
 // mean. Nothing leaves the device except through an export the person makes.
 
-import { makeTrial, plannedDays, analyze, blockCountForOverlaps } from './engine.js';
+import { makeTrial, plannedDays, analyze, blockCountForOverlaps, conditionFor, phaseOnDay } from './engine.js';
 import { dayKey } from './tracking.js';
 import { OUTCOME_RECORDS, USUAL_CARE } from './content.js';
 
@@ -184,14 +184,14 @@ export class Store {
   /** Active trials on one of their planned days today. */
   get overlapsForNewTrial() { return this.activeRecords.filter((r) => this.dayIn(r) != null).length; }
 
-  async startTrial({ intervention, outcomeId, note, blockDays = 7, washoutDays = 3 }) {
+  async startTrial({ intervention, comparator = null, outcomeId, note, blockDays = 7, washoutDays = 3 }) {
     // Kept below 2^53 so the seed survives a round trip through JSON exactly.
     const seed = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
     const trial = makeTrial({
-      intervention, outcomeId, blockCount: blockCountForOverlaps(this.overlapsForNewTrial), blockDays, washoutDays, seed,
+      intervention, comparator, outcomeId, blockCount: blockCountForOverlaps(this.overlapsForNewTrial), blockDays, washoutDays, seed,
       startDate: isoDate(startOfDay()), note,
     });
-    trial.conditionA = USUAL_CARE;
+    if (!comparator) trial.conditionA = USUAL_CARE;
     // Swift writes UUIDs in capitals; matching that keeps ids stable across a round trip.
     trial.id = trial.id.toUpperCase();
     this.person.trials.push({ id: trial.id, trial, entries: [], finishedOn: null });
@@ -329,8 +329,7 @@ export class Store {
 
   /** Active trials on an "on" day today: each asks, separately, whether it was done. */
   get trialsAskingAdherence() {
-    return this.todaysPools().filter((p) => p.record && p.record.trial.phases
-      .some((ph) => ph.kind === 'b' && p.day >= ph.startDay && p.day < ph.startDay + ph.length));
+    return this.todaysPools().filter((p) => p.record && conditionFor(p.record.trial, phaseOnDay(p.record.trial, p.day)?.kind));
   }
 
   async setAdherence(trialId, done) {

@@ -66,3 +66,18 @@ test('a few logged days is inconclusive, not a verdict', () => {
 test('nothing logged gives no analysis', () => {
   assert.equal(analyze(trial, []), null);
 });
+
+test('a comparison puts a second option in the A weeks, and the contrast is B against A', async () => {
+  const { isComparison, conditionFor } = await import('../engine.js');
+  const tens = { id: 'electrotherapy.tens-conventional', displayName: 'TENS' };
+  const cmp = makeTrial({ intervention, comparator: tens, seed: 11, startDate: '2026-01-01T00:00:00Z' });
+  assert.equal(cmp.design, 'alternatingTreatments');
+  assert.equal(isComparison(cmp), true);
+  assert.equal(isComparison(trial), false);
+  assert.equal(conditionFor(cmp, 'a'), tens);
+  assert.equal(conditionFor(trial, 'a'), null);
+  assert.equal(conditionFor(cmp, 'washout'), null);
+  const a = analyze(cmp, simulate(cmp, { effect: -3 }));
+  assert.equal(a.verdict.kind, 'meaningful');
+  assert.equal(a.verdict.direction, 'improved');
+});
