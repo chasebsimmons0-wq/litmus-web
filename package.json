@@ -1,0 +1,13 @@
+{
+  "name": "litmus-web",
+  "private": true,
+  "type": "module",
+  "description": "Litmus as an installable web app. The app itself has no build step and no dependencies; these are for the tests.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "node --test test/browser/*.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0"
+  }
+}

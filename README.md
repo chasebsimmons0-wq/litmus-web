@@ -17,9 +17,13 @@ account. It is a stopgap, not a second product.
 - Backups through the share sheet to Files or iCloud Drive, with a reminder
 - The result, the likely range, the next step, and a one-page clinician summary
 - Three guided practices, crisis links, and export and restore
+- A daily reminder, added to the phone's calendar as a repeating event with an alert
+- A warm welcome back after a gap, with nothing to catch up on
+- Crisis interception: a note that reads like a crisis brings up where to get help
 
-It doesn't have HealthKit step counts or reminders. A web app can't read Health, and on
-iOS it can't schedule a notification without a server.
+It doesn't have HealthKit step counts or push notifications. A web app can't read
+Health, and on iOS it can't schedule a notification without a server, which is why the
+reminder lives in the calendar instead.
 
 ## Files
 
@@ -30,6 +34,8 @@ iOS it can't schedule a notification without a server.
 | `tracking.js` | symptoms, medications and the before-and-after comparison, ported from `Tracking.swift` |
 | `content.js` | the intervention library, practices and onboarding options |
 | `store.js` | IndexedDB storage and export/import (`litmus.export.v3`) |
+| `reminders.js` | the calendar (`.ics`) file behind the daily reminder |
+| `safety.js` | the crisis-language check on free text |
 | `app.js` | the screens |
 | `sw.js` | offline shell, network first |
 
@@ -38,26 +44,31 @@ No build step and no dependencies.
 ## Tests
 
 ```bash
-swift build -c release
-./.build/release/paincheck fixtures pwa/test/fixtures.json
-node pwa/test/engine.test.mjs     # the JS engine matches the Swift engine
-node pwa/test/export.test.mjs     # exports round-trip, and the Swift side can read them
+npm install
+npm test                  # engine, reminders, crisis check, store — no browser needed
+npm run test:browser      # drives the real app in headless Chromium
 ```
 
-`engine.test.mjs` fails on any disagreement with the Swift engine beyond 1e-9. Change
-the Swift engine, regenerate the fixtures, and this test says whether the port needs
-the same change.
+`npm run test:browser` uses Playwright's own Chromium (`npx playwright install chromium`),
+or any Chromium you point `CHROMIUM_PATH` at.
+
+The engine tests here check the statistics behave sensibly on simulated data. Parity with
+the Swift engine — the JS port matching `Sources/PainCore` to within 1e-9 — is tested in
+the native app's repository, against fixtures it generates.
 
 ## Running it
 
 Locally:
 
 ```bash
-python3 -m http.server 8765 --directory pwa
+python3 -m http.server 8765
 ```
 
-To install it on a phone, it has to be served over HTTPS (GitHub Pages, Netlify and
-Cloudflare Pages all work). Open it in Safari, then choose Share → Add to Home Screen.
+To install it on a phone, it has to be served over HTTPS. Every push to `main` runs the
+tests and deploys to GitHub Pages (`.github/workflows/pages.yml`). Turn it on once under
+Settings → Pages → Source: **GitHub Actions**; the site is then at
+`https://<owner>.github.io/litmus-web/`. Open it in Safari, then choose Share → Add to
+Home Screen.
 
 ## Data
 

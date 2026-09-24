@@ -8,6 +8,8 @@ import {
 } from './content.js';
 import { headline, rerunSuggestion, describeThreat, clinicianSummary } from './reporting.js';
 import { COMMON_SYMPTOMS, dayKey, keyToDate, beforeAfter, BEFORE_AFTER_MINIMUM_DAYS } from './tracking.js';
+import { reminderCalendar, parseTime } from './reminders.js';
+import { mentionsCrisis } from './safety.js';
 
 const store = new Store();
 const ui = { tab: 'today', sheet: null, step: 0, draft: null, practice: null };
@@ -318,6 +320,14 @@ function todayTab() {
     title = `${pools.length} trials running`;
   }
 
+  // Back after a gap: a warm word and nothing to catch up on. Never a count of what
+  // was missed.
+  const away = store.daysSinceLastLog;
+  if (!logged && away != null && away >= 3) {
+    title = 'Good to see you.';
+    lead = 'The days in between are simply left out — there’s nothing to catch up on. Just today’s number, whenever you’re ready.';
+  }
+
   const kids = [
     h('div.row', {}, presence(), h('p.label.sage', {}, active.length === 1 && pools.length
       ? `Day ${pools[0].day + 1} of ${plannedDays(pools[0].record.trial)}` : active.length ? 'Today' : 'Baseline')),
@@ -359,7 +369,7 @@ function todayTab() {
         h('p.caption', {}, 'An honest “not today” keeps the result accurate.')));
     }
     const note = h('textarea.field', { placeholder: 'A note for today (optional)', rows: 2 }, store.today?.note ?? '');
-    note.addEventListener('change', () => store.setNote(note.value));
+    note.addEventListener('change', () => { checkForCrisis(note.value); store.setNote(note.value); });
     kids.push(note);
     kids.push(symptomCheckIn());
   }
@@ -657,6 +667,58 @@ function play(p) {
 
 // ── more ─────────────────────────────────────────────────────────────────────────
 
+function crisisLinks() {
+  return [
+    h('a.btn.primary', { href: 'tel:988', style: { textDecoration: 'none' } }, 'Call or text 988 (US & Canada)'),
+    h('p.caption', {}, 'UK & Ireland: Samaritans on 116 123. Elsewhere: ', h('a', { href: 'https://findahelpline.com', target: '_blank', rel: 'noopener' }, 'findahelpline.com'), '. In an emergency, call your local emergency number.'),
+  ];
+}
+
+// Shown when something written reads like a crisis. Once per piece of text, so editing
+// the same note doesn't bring it back each time.
+let lastCrisisText = null;
+function checkForCrisis(text) {
+  if (!mentionsCrisis(text) || text === lastCrisisText) return;
+  lastCrisisText = text;
+  ui.sheet = { kind: 'support' };
+}
+
+// Reminder times are a setting of this device rather than of a profile.
+const REMINDER_KEY = 'litmus.reminders';
+function savedReminderTimes() {
+  try { const t = JSON.parse(localStorage.getItem(REMINDER_KEY)); if (Array.isArray(t) && t.length) return t; } catch {}
+  return null;
+}
+
+function remindersSheet() {
+  const saved = savedReminderTimes();
+  const times = (saved ?? ['20:00']).slice();
+  const list = h('div.stack.tight');
+  const draw = () => list.replaceChildren(...times.map((t, i) => h('div.row', {},
+    h('input.field', { type: 'time', value: t, 'aria-label': `Reminder ${i + 1}`, onchange: (e) => { times[i] = e.target.value; } }),
+    times.length > 1 && h('button.link', { onclick: () => { times.splice(i, 1); draw(); } }, 'Remove'))),
+    times.length < 3 && h('button.link', { onclick: () => { times.push('12:00'); draw(); } }, 'Add another time'));
+  draw();
+  const add = async () => {
+    const valid = times.filter((t) => parseTime(t));
+    if (!valid.length) { toast('Choose a time first.'); return; }
+    const url = new URL('./', location.href).href;
+    const file = new File([reminderCalendar(valid, { url })], 'litmus-reminder.ics', { type: 'text/calendar' });
+    const a = h('a', { href: URL.createObjectURL(file), download: file.name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    try { localStorage.setItem(REMINDER_KEY, JSON.stringify(valid)); } catch {}
+    toast('Open the file to add it to your calendar.');
+  };
+  return [
+    h('p.body', {}, 'A web app can’t send notifications on iPhone, so Litmus adds a repeating event to your calendar instead. Its alert is the reminder, and the link in it opens Litmus.'),
+    list,
+    h('button.btn.primary', { onclick: add }, 'Add to calendar'),
+    h('p.caption', {}, 'On iPhone, open the downloaded file and choose Add All. To stop the reminders, delete the event in Calendar.'),
+    saved && h('p.caption', {}, `Last added: ${saved.join(', ')}.`),
+  ];
+}
+
 // Backups go through the share sheet, where iOS offers "Save to Files" and so iCloud
 // Drive. Where sharing a file isn't supported, it downloads instead.
 async function backUp() {
@@ -698,13 +760,13 @@ function moreTab() {
     header('More'),
     card('clay', h('p.label', {}, 'If you’re struggling right now'),
       h('p.body', {}, 'Pain that doesn’t let up can be exhausting in ways that are hard to explain. If you’re thinking about harming yourself, please reach out now.'),
-      h('a.btn.primary', { href: 'tel:988', style: { textDecoration: 'none' } }, 'Call or text 988 (US & Canada)'),
-      h('p.caption', {}, 'UK & Ireland: Samaritans on 116 123. Elsewhere: ', h('a', { href: 'https://findahelpline.com', target: '_blank', rel: 'noopener' }, 'findahelpline.com'), '. In an emergency, call your local emergency number.')),
+      ...crisisLinks()),
     store.backupIsDue && backupNudge(),
     h('div.stack.tight', {},
       h('p.label', {}, 'Tracking'),
       row('Symptoms you track', 'symptoms', store.trackedSymptoms.length ? store.trackedSymptoms.map((x) => x.name).join(', ') : null),
-      row('Medications', 'medications', store.medications.length ? plural(store.medications.length, 'medication') : null)),
+      row('Medications', 'medications', store.medications.length ? plural(store.medications.length, 'medication') : null),
+      row('Daily reminder', 'reminders', savedReminderTimes()?.join(', ') ?? null)),
     card('', h('p.label', {}, 'Your data'),
       h('p.body', {}, 'Everything is stored in this browser on this device, and nowhere else. Back up regularly: if the phone is reset or lost, a backup is how you get your history back. It’s the same file the iPhone app reads, so it also moves you between the two.'),
       !standalone && h('p.caption', {}, 'Tip: in Safari, Share → Add to Home Screen. An installed web app keeps its data more reliably than a browser tab.'),
@@ -759,7 +821,8 @@ function addMedicationSheet() {
   const form = { name: '', dose: '', startedOn: dayKey(), note: '' };
   const save = h('button.btn.primary', { disabled: true, onclick: async () => {
     await store.addMedication(form);
-    openSheet('medications');
+    checkForCrisis(form.note);
+    if (ui.sheet?.kind === 'support') render(); else openSheet('medications');
   } }, 'Save');
   return [
     h('input.field', { placeholder: 'Name', oninput: (e) => { form.name = e.target.value; save.disabled = !form.name.trim(); } }),
@@ -767,7 +830,7 @@ function addMedicationSheet() {
     h('label.caption', {}, 'Started'),
     h('input.field', { type: 'date', value: form.startedOn, max: dayKey(), oninput: (e) => { form.startedOn = e.target.value || dayKey(); } }),
     h('textarea.field', { placeholder: 'Anything to remember (optional)', rows: 2, oninput: (e) => { form.note = e.target.value; } }),
-    h('p.caption', {}, 'Written as you’d say it. Litmus doesn’t read, check or interpret any of this.'),
+    h('p.caption', {}, 'Written as you’d say it, and kept on this device.'),
     save,
   ];
 }
@@ -834,6 +897,12 @@ function sheet() {
     case 'setup': title = store.activeRecords.length ? 'Start another trial' : 'Set up a trial'; body = setupSheet(); break;
     case 'symptoms': title = 'Symptoms'; body = symptomsSheet(); break;
     case 'medications': title = 'Medications'; body = medicationsSheet(); break;
+    case 'reminders': title = 'Daily reminder'; body = remindersSheet(); break;
+    case 'support': title = 'You don’t have to carry this alone';
+      body = [h('p.reading', {}, 'What you wrote sounds really hard. If you’re thinking about harming yourself or ending your life, please talk to someone now — they’re there for exactly this, any time of day.'),
+        ...crisisLinks(),
+        h('p.caption', {}, 'Your note is saved as you wrote it. Litmus doesn’t send it anywhere.')];
+      break;
     case 'addMedication': title = 'Add a medication'; body = addMedicationSheet(); break;
     case 'medication': title = store.medications.find((x) => x.id === sh.id)?.name ?? 'Medication'; body = medicationSheet(sh.id); break;
     case 'clinician': {

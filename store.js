@@ -383,6 +383,19 @@ export class Store {
     return out;
   }
 
+  /** Whole days since anything was last scored, or null if nothing ever has been. */
+  get daysSinceLastLog() {
+    const p = this.person;
+    const at = (start, day) => { const d = startOfDay(new Date(start)); d.setDate(d.getDate() + day); return d; };
+    let last = null;
+    const see = (start, entries) => {
+      for (const e of entries) { const d = at(start, e.day); if (!last || d > last) last = d; }
+    };
+    if (p?.baselineStartedOn) see(p.baselineStartedOn, p.baseline);
+    for (const r of p?.trials ?? []) see(r.trial.startDate, r.entries);
+    return last ? daysBetween(last) : null;
+  }
+
   // Medications — tracked, never tested
 
   get medications() {

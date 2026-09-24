@@ -2,10 +2,10 @@
 // connection; the cache is only the fallback. Data never passes through here — it
 // lives in IndexedDB.
 
-const CACHE = 'litmus-v2';
+const CACHE = 'litmus-v3';
 const SHELL = [
   './', './index.html', './styles.css', './app.js', './engine.js', './store.js',
-  './content.js', './reporting.js', './tracking.js', './manifest.webmanifest',
+  './content.js', './reporting.js', './tracking.js', './reminders.js', './safety.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
 ];
 
