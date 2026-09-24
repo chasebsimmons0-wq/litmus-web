@@ -46,10 +46,15 @@ reminder lives in the calendar instead.
 | `safety.js` | the crisis-language check on free text |
 | `record.js` | the care record and its questions for the clinician |
 | `mascot.js` | Ember, drawn as inline SVG |
+| `insight.js` | the anonymised result format (`litmus.result.v1`) for future pooled insight; unused so far |
 | `app.js` | the screens |
 | `sw.js` | offline shell, network first |
 
 No build step and no dependencies.
+
+## Not built yet
+
+Aggregate insight and peer connection need a server. See `docs/server-features.md`.
 
 ## Tests
 
