@@ -39,7 +39,8 @@ export function anonymisedResult(record, analysis, profile) {
     },
     completion: {
       plannedDays: plannedDays(t),
-      ranFullLength: lastLoggedDay >= plannedDays(t) - 1,
+      // Recorded when the trial was closed; older records fall back to the last logged day.
+      ranFullLength: record.endedEarly != null ? !record.endedEarly : lastLoggedDay >= plannedDays(t) - 1,
       loggedDays: { a: a?.a.loggedDays ?? 0, b: a?.b.loggedDays ?? 0 },
       flareDays: { a: a?.a.flareDays ?? 0, b: a?.b.flareDays ?? 0 },
       adherentDays: a?.b.adherentDays ?? null,

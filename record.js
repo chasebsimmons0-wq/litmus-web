@@ -127,8 +127,15 @@ export function careRecord({ name, profile, trials = [], medications = [], recen
     out.push('');
   }
 
-  const tried = labels(LIBRARY.map((i) => [i.id, i.displayName]), profile.alreadyTried ?? []);
+  const tried = [...labels(LIBRARY.map((i) => [i.id, i.displayName]), profile.alreadyTried ?? []), ...(profile.alsoTried ?? [])];
   if (tried.length) out.push('TRIED BEFORE, AS REPORTED (not tested here)', ...tried.map((x) => `- ${x}`), '');
+
+  if ((profile.ruledOut ?? []).length) out.push('RULED OUT BY CLINICIANS, AS REPORTED', ...profile.ruledOut.map((x) => `- ${x}`), '');
+  const noEffect = done.filter(({ record, analysis: a }) => a?.verdict.kind === 'null' && !isComparison(record.trial));
+  if (noEffect.length) {
+    out.push('RULED OUT BY TESTING HERE', ...noEffect.map(({ record, analysis: a }) =>
+      `- ${record.trial.conditionB.displayName}: no effect of a meaningful size on ${a.outcome.displayName.toLowerCase()}.`), '');
+  }
 
   if (medications.length) {
     out.push('MEDICATIONS');

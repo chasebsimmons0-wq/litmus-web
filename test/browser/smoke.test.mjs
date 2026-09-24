@@ -87,7 +87,7 @@ test('the care record gathers the trial, and questions can be added', async () =
   await page.getByRole('button', { name: /Care record for appointments/ }).click();
   const sheet = page.getByRole('dialog', { name: 'Care record' });
   await sheet.getByPlaceholder('A question of your own').fill('Could I see a pain specialist?');
-  await sheet.getByRole('button', { name: 'Add' }).click();
+  await sheet.getByRole('button', { name: 'Add', exact: true }).click();
   await sheet.getByText('Could I see a pain specialist?', { exact: true }).waitFor();
   const text = await page.getByRole('dialog', { name: 'Care record' }).locator('pre').innerText();
   assert.match(text, /PAIN RECORD/);

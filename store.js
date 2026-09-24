@@ -54,6 +54,8 @@ export const isoDate = (d) => new Date(d).toISOString().replace(/\.\d{3}Z$/, 'Z'
 
 export const emptyProfile = () => ({
   sites: [], qualities: [], diagnosesGiven: [], alreadyTried: [], factors: [], redFlags: [],
+  // In the person's own words, for the care record only. Never part of an anonymised result.
+  alsoTried: [], ruledOut: [],
   yearsWithPain: null, completedOnboarding: false, baselineStartedOn: null,
 });
 
@@ -153,6 +155,19 @@ export class Store {
 
   get profile() { return this.person?.profile ?? emptyProfile(); }
 
+  /** Adds to one of the person's own lists in the profile (alsoTried, ruledOut). */
+  async addProfileItem(field, text) {
+    const t = text.trim();
+    if (!t) return;
+    (this.person.profile[field] ??= []).push(t);
+    await this.save();
+  }
+
+  async removeProfileItem(field, index) {
+    this.person.profile[field]?.splice(index, 1);
+    await this.save();
+  }
+
   async saveProfile(profile) {
     const p = this.person;
     p.profile = profile;
@@ -208,6 +223,8 @@ export class Store {
     const r = this.running;
     if (!r) return;
     r.finishedOn = isoDate(new Date());
+    // Kept so a trial stopped early is never mistaken for one that ran its course.
+    r.endedEarly = !this.focusedIsFinished;
     this.focusedId = null;
     await this.save();
   }
@@ -524,6 +541,7 @@ export class Store {
       baseline: p.baseline.map(plainEntry),
       completedTrials: this.completed.map((r) => ({
         trial: toNativeTrial(r.trial, 'completed'), entries: r.entries.map(plainEntry), finishedOn: r.finishedOn,
+        ...(r.endedEarly != null ? { endedEarly: r.endedEarly } : {}),
       })),
       activeTrials: this.activeRecords.map((r) => ({ trial: toNativeTrial(r.trial, 'running'), entries: r.entries.map(plainEntry) })),
       // Version 2 readers only know one running trial.
@@ -566,7 +584,7 @@ export class Store {
     const trials = [];
     for (const c of data.completedTrials ?? []) {
       const trial = fromNativeTrial(c.trial);
-      trials.push({ id: trial.id, trial, entries: c.entries.map(readEntry), finishedOn: c.finishedOn });
+      trials.push({ id: trial.id, trial, entries: c.entries.map(readEntry), finishedOn: c.finishedOn, endedEarly: c.endedEarly ?? null });
     }
     if (Array.isArray(data.activeTrials)) {
       for (const a of data.activeTrials) {

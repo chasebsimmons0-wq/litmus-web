@@ -158,6 +158,19 @@ export function describeThreat(t) {
   }
 }
 
+// What the interval excludes, stated against the minimal important difference.
+function ruledOut(a) {
+  if (!Number.isFinite(a.low) || !Number.isFinite(a.high) || a.trial.design === 'alternatingTreatments') return [];
+  const mid = a.thresholds.important;
+  const lower = a.outcome.lowerIsBetter;
+  const out = [];
+  const benefitExcluded = lower ? a.low > -mid : a.high < mid;
+  const harmExcluded = lower ? a.high < mid : a.low > -mid;
+  if (benefitExcluded) out.push(`an improvement of ${f(mid)} points or more`);
+  if (harmExcluded) out.push(`a worsening of ${f(mid)} points or more`);
+  return out;
+}
+
 function verdictLine(a) {
   const v = a.verdict;
   if (v.kind === 'meaningful') {
@@ -254,7 +267,10 @@ export function clinicianSummary(a, patientLabel) {
   } else {
     out.push('No estimate produced — insufficient data.');
   }
-  out.push('', `INTERPRETATION: ${verdictLine(a)}`, '');
+  out.push('', `INTERPRETATION: ${verdictLine(a)}`);
+  const ruled = ruledOut(a);
+  if (ruled.length) out.push(`RULED OUT (95% interval): ${ruled.join('; ')}.`);
+  out.push('');
 
   out.push('LIMITATIONS AND THREATS TO VALIDITY');
   out.push('- Unblinded single-patient design; expectancy effects are not controlled.');

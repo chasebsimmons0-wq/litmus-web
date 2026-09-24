@@ -47,3 +47,11 @@ test('short verdicts', () => {
   assert.equal(shortVerdict(analysis({ kind: 'meaningful', direction: 'improved' })), 'clear improvement');
   assert.equal(shortVerdict(analysis({ kind: 'inconclusive', reason: 'insufficientData' })), 'not settled');
 });
+
+test('the record carries what was tried and ruled out, from the person and from testing', () => {
+  const text = careRecord({ name: 'Sam', profile: { ...profile, alsoTried: ['Physio in 2023'], ruledOut: ['A disc problem, on MRI'] },
+    trials: [{ ...done, analysis: { ...done.analysis, outcome: { displayName: 'Average daily pain' } } }], dateLocale: 'en-GB' });
+  assert.match(text, /- Physio in 2023/);
+  assert.match(text, /RULED OUT BY CLINICIANS, AS REPORTED\n- A disc problem, on MRI/);
+  assert.match(text, /RULED OUT BY TESTING HERE\n- Heat: no effect of a meaningful size on average daily pain\./);
+});

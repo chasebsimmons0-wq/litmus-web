@@ -10,7 +10,7 @@ import { careRecord } from './record.js';
 import { ember } from './mascot.js';
 import { anonymisedResult } from './insight.js';
 import { LocalCommunity, cardSummary, NOTE_LIMIT } from './community.js';
-import { headline, rerunSuggestion, describeThreat, clinicianSummary } from './reporting.js';
+import { headline, rerunSuggestion, describeThreat, clinicianSummary, plan } from './reporting.js';
 import { COMMON_SYMPTOMS, dayKey, keyToDate, beforeAfter, BEFORE_AFTER_MINIMUM_DAYS } from './tracking.js';
 import { reminderCalendar, parseTime } from './reminders.js';
 import { mentionsCrisis, crisisLine } from './safety.js';
@@ -275,7 +275,7 @@ function onboarding() {
       body = [h('h1.display.md', {}, 'Here’s the picture so far'),
         card('', h('p.label', {}, 'How pain works'),
           h('p.body', {}, 'All pain is produced by the nervous system as a protective output — real, and not “in your head”. When pain lasts, the system can become more sensitive, so the amount of pain stops tracking the amount of damage. That’s why sleep, stress and activity move it, and why things that calm the system can help.')),
-        wide >= 2 && card('sage', h('p.body', {}, 'Some of what you described — pain in several places, sleep, fatigue, sensitivity — is often discussed as the nervous system turning up its volume. That’s not a diagnosis. It’s one reason sleep and pacing sit near the top of the list of things you could test.')),
+        wide >= 2 && card('sage', h('p.body', {}, 'Some of what you described — pain in several places, sleep, fatigue, sensitivity — is often discussed as the nervous system turning up its volume. That’s not a diagnosis, and only a clinician can say what’s going on for you. Sleep and pacing are among the things on the list you could test, if you want to.')),
         card('', h('p.label', {}, 'What happens next'),
           h('p.body', {}, 'For the next week or two, just score your pain once a day. That shows how much it moves on its own, which is what a fair test has to be measured against. Then you can choose one thing to test.'))];
     }
@@ -324,8 +324,9 @@ function todayTab() {
     const { record, day } = pools[0];
     const kind = phaseOnDay(record.trial, day).kind;
     const doing = conditionFor(record.trial, kind);
+    const weekly = phaseOnDay(record.trial, day)?.length === 7;
     title = kind === 'washout' ? 'A quiet day between blocks.'
-      : doing ? `A week on ${doing.displayName}.` : 'An off week.';
+      : doing ? `${weekly ? 'A week' : 'A block'} on ${doing.displayName}.` : `An off ${weekly ? 'week' : 'block'}.`;
     lead = kind === 'washout' ? (isComparison(record.trial) ? 'Neither one today. Carry on as you were.' : 'Carry on as you were.')
       : kind === 'b' ? (record.trial.userNote || 'Do the thing you’re testing, as planned.')
       : doing ? `Do ${doing.displayName.toLowerCase()} this week, not ${record.trial.conditionB.displayName.toLowerCase()}.` : 'Nothing to do differently.';
@@ -358,7 +359,14 @@ function todayTab() {
     })));
   }
 
-  outcomes.forEach((outcomeId, index) => kids.push(outcomeSection(outcomeId, index === 0, outcomes.length > 1)));
+  // Flare mode: a bad day asks for the number and nothing else. The rest waits behind
+  // one optional link.
+  const minimal = flareOn && !ui.flareMore;
+  if (flareOn) {
+    kids[1] = h('h1.display', {}, 'A hard day.');
+    kids[2] = h('p.reading', {}, logged ? 'That’s all Litmus needs today. Everything else can wait.' : 'Just the number, whenever you can. Everything else can wait.');
+  }
+  outcomes.forEach((outcomeId, index) => kids.push(outcomeSection(outcomeId, index === 0, outcomes.length > 1, minimal)));
 
   if (outcomes.length) {
     kids.push(flareToggle(flareOn, async (on) => {
@@ -368,7 +376,9 @@ function todayTab() {
     if (flareOn) kids.push(flarePlanCard());
   }
 
-  if (logged) {
+  if (logged && minimal) {
+    kids.push(h('button.link', { onclick: () => { ui.flareMore = true; render(); } }, 'Add more for today (optional)'));
+  } else if (logged) {
     // One question per trial on an "on" day. Named, rather than slotted into a
     // sentence: "did you do your heat" reads badly, and custom names can be anything.
     for (const pool of store.trialsAskingAdherence) {
@@ -394,7 +404,7 @@ function todayTab() {
 }
 
 // One measure's question, or what was logged for it and a way to add to it.
-function outcomeSection(outcomeId, prominent, named = false) {
+function outcomeSection(outcomeId, prominent, named = false, minimal = false) {
   const outcome = OUTCOMES[outcomeId];
   const today = store.todayFor(outcomeId);
   const log = async (v) => {
@@ -425,10 +435,10 @@ function outcomeSection(outcomeId, prominent, named = false) {
     h('div.row.between', {}, h('p.label', {}, named ? outcome.displayName : 'Logged today'),
       h('button.link', { style: { padding: 0 }, onclick: () => store.clearToday(outcomeId) }, 'Change')),
     h('div.row', { style: { alignItems: 'baseline' } }, h('span.number', {}, fmt(today.score, today.sampleCount > 1 ? 1 : 0)), h('span.muted', {}, 'out of 10')),
-    h('p.caption', {}, today.sampleCount > 1
+    !minimal && h('p.caption', {}, today.sampleCount > 1
       ? `Average of ${plural(today.sampleCount, 'reading')} today.`
       : 'One reading so far. It moves through the day — add more whenever you like, and the day’s score becomes their average.'),
-    more);
+    !minimal && more);
 }
 
 // Optional scores for whatever else someone chose to watch.
@@ -477,8 +487,8 @@ function trialTab() {
     card('', h('div.row.between', {},
         h('div', {}, h('div.number', {}, elapsed), h('p.caption', {}, `of ${plannedDays(trial)} days`)),
         h('div', {}, h('div.number', {}, logged), h('p.caption', {}, 'logged')),
-        h('div', {}, h('div.number', {}, `${doneBlocks}/${blocks.length}`), h('p.caption', {}, 'weeks done'))),
-      missed > 0 && h('p.caption', {}, `${plural(missed, 'day')} missed so far — that’s normal and already accounted for.`)),
+        h('div', {}, h('div.number', {}, `${doneBlocks}/${blocks.length}`), h('p.caption', {}, blocks[0]?.length === 7 ? 'weeks done' : 'blocks done'))),
+      missed > 0 && h('p.caption', {}, 'Some days have been missed — that’s normal and already accounted for.')),
     card('', h('p.label', {}, 'Your scores'), trace(store.entries, trial, { today: day }), traceLegend(trial)),
     card('', h('p.label', {}, 'The order'),
       h('div', { style: { display: 'grid', gridTemplateColumns: `repeat(${blocks.length}, minmax(0, 1fr))`, gap: '4px' } }, blocks.map((p) => {
@@ -543,7 +553,7 @@ function setupSheet() {
   const hidden = LIBRARY.filter((i) => !menu.includes(i) && !running.has(i.id));
   const overlaps = store.overlapsForNewTrial;
   const blocks = blockCountForOverlaps(overlaps);
-  const shape = { ...TRIAL_DEFAULTS, blockCount: blocks };
+  const shape = { ...TRIAL_DEFAULTS, blockCount: blocks, blockDays: ui.setup?.blockDays ?? TRIAL_DEFAULTS.blockDays, washoutDays: ui.setup?.washoutDays ?? TRIAL_DEFAULTS.washoutDays };
   const total = trialLength(shape);
   const st = ui.setup ??= { pick: menu[0]?.id ?? 'custom', custom: '', outcomeId: PAIN_ID, note: '', against: 'usual' };
   // The baseline only scores pain, so its variability only sizes pain trials.
@@ -555,17 +565,21 @@ function setupSheet() {
   const comparator = st.against === 'usual' ? null : menu.find((i) => i.id === st.against) ?? null;
   const outcome = OUTCOMES[st.outcomeId];
   const detect = detectableEffect(sd ?? 1.5, 0.5, blocks, shape.blockDays, outcome, overlaps);
+  // A block length sized to this person's own variability, when there's a baseline to size it from.
+  const suggested = sd != null && outcome.important != null ? plan(sd, 0.5, outcome.important, outcome, shape.washoutDays) : null;
 
   const option = (i) => h(`button.check${st.pick === i.id ? '.on' : ''}`, { onclick: () => { st.pick = i.id; render(); } },
     h('span.box', {}, st.pick === i.id ? '✓' : ''),
     h('div.grow', {}, h('div', { style: { fontSize: '16px' } }, i.displayName),
-      st.pick === i.id && h('p.caption', { style: { marginTop: '6px' } }, i.evidenceNote)));
+      st.pick === i.id && h('p.caption', { style: { marginTop: '6px' } }, i.evidenceNote),
+      st.pick === i.id && h('p.caption', { style: { marginTop: '4px' } }, `Source: ${i.evidenceSource}.`),
+      st.pick === i.id && i.trialTip && h('p.caption', { style: { marginTop: '4px', color: 'var(--ink-soft)' } }, `A fair test: ${i.trialTip}`)));
 
   const customField = h('input.field', { placeholder: 'Name it', value: st.custom, oninput: (e) => { st.custom = e.target.value; start.disabled = !e.target.value.trim(); } });
   const noteField = h('textarea.field', { placeholder: 'What exactly will you do? e.g. “20 minutes of heat, evenings”', rows: 2, oninput: (e) => { st.note = e.target.value; } }, st.note);
   const start = h('button.btn.primary', { disabled: !chosen, onclick: async () => {
     const pick = st.pick === 'custom' ? customIntervention(st.custom.trim()) : chosen;
-    await store.startTrial({ intervention: pick, comparator, outcomeId: st.outcomeId, note: st.note.trim() || null });
+    await store.startTrial({ intervention: pick, comparator, outcomeId: st.outcomeId, note: st.note.trim() || null, blockDays: shape.blockDays, washoutDays: shape.washoutDays });
     ui.setup = null; ui.sheet = null; ui.tab = 'today'; render();
     toast('Trial started. Today is day 1.');
   } }, 'Start the trial today');
@@ -591,8 +605,16 @@ function setupSheet() {
     overlaps > 0 && card('clay', h('p.label', { style: { color: 'var(--clay)' } }, 'Running alongside other trials'),
       h('p.body', {}, `${overlaps === 1 ? 'One trial is already running. Its' : `${overlaps} trials are already running. Their`} on and off weeks will be accounted for, but every trial running at once makes each answer less precise — this one and ${overlaps === 1 ? 'the one' : 'the ones'} already going. A real change becomes easier to miss, and if two things interact that can’t be untangled.`),
       blocks > 10 && h('p.caption', {}, `To make up for some of that, this trial alternates over ${blocks} weeks instead of the usual 10.`)),
-    card('sage', h('p.label.sage', {}, 'What this trial can see'),
-      h('p.body', {}, `${blocks} alternating weeks, ${comparator ? 'one then the other' : 'on and off'} in a random order, with ${plural(shape.washoutDays, 'quiet day')} between each — ${total} days in all. ${sd != null ? 'With how much your scores move' : 'For typical day-to-day variation'}, it could reliably detect a change of about ${fmt(detect)} points${outcome.important != null ? `; a change worth caring about is around ${fmt(outcome.important, 0)}` : ''}.${outcome.important != null && detect > outcome.important ? ' A real change smaller than that could be missed — the result will say so if it is.' : ''}`),
+    h('p.label', {}, 'Length'),
+    h('p.caption', {}, 'Days in each block'),
+    h('div.chips', {}, [5, 7, 10, 14].map((d) => h(`button.chip${shape.blockDays === d ? '.on' : ''}`, { 'aria-pressed': String(shape.blockDays === d), onclick: () => { st.blockDays = d; render(); } }, `${d} days`))),
+    h('p.caption', {}, 'Quiet days between blocks, so one block’s effect can fade before the next'),
+    h('div.chips', {}, [0, 2, 3, 5].map((d) => h(`button.chip${shape.washoutDays === d ? '.on' : ''}`, { 'aria-pressed': String(shape.washoutDays === d), onclick: () => { st.washoutDays = d; render(); } }, d === 0 ? 'None' : `${d} days`))),
+    suggested && h('p.caption', {}, `Suggested for your scores: ${suggested.blockDays}-day blocks. `,
+      (suggested.blockDays !== shape.blockDays) && h('button.link', { style: { padding: 0 }, onclick: () => { st.blockDays = suggested.blockDays; render(); } }, 'Use that')),
+    shape.blockDays < 7 && h('p.caption', {}, 'Blocks shorter than a week can be swayed by one unusual day, and the result will flag it.'),
+    card(outcome.important != null && detect > outcome.important ? 'clay' : 'sage', h('p.label.sage', {}, 'What this trial can see'),
+      h('p.body', {}, `${blocks} alternating blocks of ${plural(shape.blockDays, 'day')}, ${comparator ? 'one then the other' : 'on and off'} in a random order, with ${plural(shape.washoutDays, 'quiet day')} between each — ${total} days in all. ${sd != null ? 'With how much your scores move' : 'For typical day-to-day variation'}, it could reliably detect a change of about ${fmt(detect)} points${outcome.important != null ? `; a change worth caring about is around ${fmt(outcome.important, 0)}` : ''}.${outcome.important != null && detect > outcome.important ? ' A real change smaller than that could be missed — the result will say so if it is.' : ''}`),
       sd == null && h('p.caption', {}, st.outcomeId === PAIN_ID ? `Finish at least ${BASELINE_MIN_DAYS} baseline days and this becomes a number about you.` : 'Your baseline scores pain only, so this uses typical day-to-day variation for this measure.')),
     start,
   ];
@@ -637,10 +659,27 @@ function resultBlock(a, record) {
         h('div', { style: { position: 'absolute', top: '10px', height: '20px', width: '3px', left: `calc(${pos(a.effect)} - 1px)`, background: 'var(--ink)', borderRadius: '2px' } })),
       h('div.row.between.caption', {}, h('span', {}, `← ${better}`), h('span', {}, isComparison(trial) ? 'No difference' : 'No change'), h('span', {}, `${worse} →`)),
       h('p.caption', {}, `Best estimate ${a.effect > 0 ? '+' : ''}${fmt(a.effect)} points; 95% range ${fmt(a.low)} to ${fmt(a.high)}. The shaded middle is too small to matter.`)),
-    rerun && card('sage', h('p.label.sage', {}, 'Next'), h('p.body', {}, rerun)),
+    rerun && card('sage', h('p.label.sage', {}, 'Next'), h('p.body', {}, rerun),
+      record.finishedOn && !['insufficientData', 'tooFewCompletedBlocks', 'underpowered'].includes(a.verdict.reason)
+        && h('button.btn.outline', { onclick: () => setUpRerun(a) }, 'Set up this rerun')),
     card('', h('p.label', {}, 'Scores'), trace(record.entries, trial, { today: record.finishedOn ? null : store.currentDay }), traceLegend(trial)),
     ready && a.threats.length > 0 && card('', h('p.label', {}, 'Worth knowing'), a.threats.map((t) => h('p.body', {}, describeThreat(t)))),
     h('button.btn.outline', { onclick: () => openSheet('clinician', { a }) }, 'Summary for a clinician'));
+}
+
+// Opens trial setup filled in with the same question and a length sized to the result.
+function setUpRerun(a) {
+  const t = a.trial;
+  const p = plan(Math.max(a.a.standardDeviation, a.b.standardDeviation), a.rho, a.thresholds.important, a.outcome);
+  const known = LIBRARY.some((i) => i.id === t.conditionB.id);
+  ui.setup = {
+    pick: known ? t.conditionB.id : 'custom', custom: known ? '' : t.conditionB.displayName,
+    outcomeId: t.outcomeId, note: t.userNote ?? '',
+    against: isComparison(t) ? t.conditionA.id : 'usual',
+    blockDays: p.blockDays, washoutDays: p.washoutDays,
+  };
+  ui.sheet = { kind: 'setup' };
+  render();
 }
 
 function resultTab() {
@@ -673,6 +712,9 @@ function practiceTab() {
     h('div.stack.tight', {}, LESSONS.map((l) => h('button.check', { onclick: () => openSheet('lesson', { id: l.id }) },
       h('div.grow', {}, h('div', { style: { fontSize: '16px' } }, l.title), h('p.caption', {}, `${l.minutes} min read`)),
       h('span.muted', {}, '›')))),
+    h('button.check', { onclick: () => openSheet('library') },
+      h('div.grow', {}, h('div', { style: { fontSize: '16px' } }, 'Things people test'), h('p.caption', {}, 'What the evidence says about each, and what a fair test looks like')),
+      h('span.muted', {}, '›')),
     card('sage', h('p.label', {}, 'Your flare plan'),
       h('p.body', {}, planned ? 'Written and ready. It appears on Today whenever you mark a flare.' : 'A short note to yourself for the hard days, written on an easier one.'),
       h('button.btn.outline', { onclick: () => openSheet('flarePlan') }, planned ? 'Look at it' : 'Write it')),
@@ -796,7 +838,8 @@ function remindersSheet() {
   const add = async () => {
     const valid = times.filter((t) => parseTime(t));
     if (!valid.length) { toast('Choose a time first.'); return; }
-    const url = new URL('./', location.href).href;
+    // ?log opens straight to today's score.
+    const url = new URL('./?log', location.href).href;
     const file = new File([reminderCalendar(valid, { url })], 'litmus-reminder.ics', { type: 'text/calendar' });
     const a = h('a', { href: URL.createObjectURL(file), download: file.name });
     document.body.append(a); a.click(); a.remove();
@@ -809,6 +852,7 @@ function remindersSheet() {
     list,
     h('button.btn.primary', { onclick: add }, 'Add to calendar'),
     h('p.caption', {}, 'On iPhone, open the downloaded file and choose Add All. To stop the reminders, delete the event in Calendar.'),
+    h('p.caption', {}, 'If you added Litmus to your Home Screen, open it from there when the alert comes. The link in the event opens Safari, which keeps its own separate copy of your data.'),
     saved && h('p.caption', {}, `Last added: ${saved.join(', ')}.`),
   ];
 }
@@ -878,6 +922,10 @@ function moreTab() {
       h('p.caption', {}, days == null ? 'Never backed up.' : days === 0 ? 'Last backed up today.' : `Last backed up ${plural(days, 'day')} ago.`),
       restoreButton(),
       h('p.caption', {}, 'After a reset: install Litmus again, choose “Restore from an export file”, and pick the backup from iCloud Drive. Restoring always creates a new profile, so it never overwrites anything.')),
+    card('', h('p.label', {}, 'Our promise about your data'),
+      h('p.body', {}, 'Your health data stays on this device. There’s no account, no analytics, no advertising, and nothing is sold or shared. Litmus never sends your data anywhere — a backup only goes where you choose to save it.'),
+      h('p.body', {}, 'If syncing or a community is ever added, it will be off unless you turn it on, it will say exactly what leaves the device, and this promise will be updated first.'),
+      h('p.caption', {}, 'Your full history can always be exported, as an open JSON file, from “Back up” above.')),
     card('', h('p.label', {}, 'How the result is worked out'),
       h('p.body', {}, 'Your trial switches the thing being tested on and off in randomised weeks. Litmus compares each on-week with the off-week beside it, so slow drifts and good or bad stretches mostly cancel out, and it only calls something a real change when the whole plausible range clears the “too small to matter” band.'),
       h('p.caption', {}, 'It can’t control for expectation — you know when you’re doing the thing — and it isn’t medical advice.')),
@@ -1018,18 +1066,33 @@ function recordText() {
   });
 }
 
+// A short editable list kept in the profile, shown in the care record.
+function listCard(label, field, placeholder, caption) {
+  let draft = '';
+  const items = store.profile[field] ?? [];
+  const input = h('input.field', { placeholder, oninput: (e) => { draft = e.target.value; } });
+  return card('', h('p.label', {}, label),
+    items.map((x, i) => h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, x),
+      h('button.link', { onclick: () => store.removeProfileItem(field, i) }, 'Remove'))),
+    h('div.row', {}, input, h('button.btn.outline', { 'aria-label': `Add to ${label.toLowerCase()}`, style: { width: 'auto', padding: '0 18px' }, onclick: () => store.addProfileItem(field, draft) }, 'Add')),
+    h('p.caption', {}, caption));
+}
+
 function recordSheet() {
   const text = recordText();
   let draft = '';
   const field = h('input.field', { placeholder: 'A question of your own', oninput: (e) => { draft = e.target.value; } });
   return [
     h('p.body', {}, 'One page for a new specialist, a GP or a physio: what you’ve reported, what you’ve tested and what it showed, your medications, and questions to raise. Journal entries are never included.'),
+    listCard('Tried before', 'alsoTried', 'e.g. physio in 2023, a nerve block', 'Treatments from before Litmus, in your words.'),
+    listCard('Ruled out by a clinician', 'ruledOut', 'e.g. a disc problem, on an MRI', 'Only what you’ve actually been told.'),
     card('', h('p.label', {}, 'Your questions'),
       store.questions.map((q) => h('div.row.between', {}, h('span.body', { style: { color: 'var(--ink)' } }, q.text),
         h('button.link', { onclick: () => store.removeQuestion(q.id) }, 'Remove'))),
       h('div.row', {}, field, h('button.btn.outline', { style: { width: 'auto', padding: '0 18px' }, onclick: () => store.addQuestion(draft) }, 'Add')),
       h('p.caption', {}, 'Yours come first. Litmus adds a few more from what you’ve logged — questions for the clinician, never advice.')),
-    card('', h('pre.pre', {}, text)),
+    h('section.card.print-me', {}, h('pre.pre', {}, text)),
+    h('button.btn.outline', { onclick: () => window.print() }, 'Print or save as PDF'),
     h('button.btn.primary', { onclick: async () => {
       try { if (navigator.share) await navigator.share({ title: 'Pain record', text }); else { await navigator.clipboard.writeText(text); toast('Copied.'); } } catch {}
     } }, navigator.share ? 'Share' : 'Copy'),
@@ -1139,6 +1202,12 @@ function sheet() {
     case 'symptoms': title = 'Symptoms'; body = symptomsSheet(); break;
     case 'medications': title = 'Medications'; body = medicationsSheet(); break;
     case 'reminders': title = 'Daily reminder'; body = remindersSheet(); break;
+    case 'library': title = 'Things people test';
+      body = [h('p.body', {}, 'The same list for everyone. It’s a menu with the evidence attached, not a recommendation — what suits you is a question for you and the people who treat you.'),
+        LIBRARY.map((i) => card('', h('p.label.sage', {}, i.displayName), h('p.body', {}, i.evidenceNote),
+          h('p.caption', {}, `Source: ${i.evidenceSource}.`),
+          i.trialTip && h('p.caption', { style: { color: 'var(--ink-soft)' } }, `A fair test: ${i.trialTip}`)))];
+      break;
     case 'lesson': title = LESSONS.find((x) => x.id === sh.id)?.title ?? 'Learn'; body = lessonSheet(sh.id); break;
     case 'flarePlan': title = 'Flare plan'; body = flarePlanSheet(); break;
     case 'journal': title = 'Journal'; body = journalSheet(); break;
@@ -1155,10 +1224,11 @@ function sheet() {
       const text = clinicianSummary(sh.a, store.person.name);
       title = 'For a clinician';
       body = [h('p.body', {}, 'One page to show or send. It states the method, the result and its limits, and recommends nothing.'),
-        card('', h('pre.pre', {}, text)),
+        h('section.card.print-me', {}, h('pre.pre', {}, text)),
         h('button.btn.primary', { onclick: async () => {
           try { if (navigator.share) await navigator.share({ title: 'Self-experiment summary', text }); else { await navigator.clipboard.writeText(text); toast('Copied.'); } } catch {}
-        } }, navigator.share ? 'Share' : 'Copy')];
+        } }, navigator.share ? 'Share' : 'Copy'),
+        h('button.btn.outline', { onclick: () => window.print() }, 'Print or save as PDF')];
       break;
     }
     case 'past': {
@@ -1281,7 +1351,7 @@ function render() {
 // A new day can begin while the app sits open.
 let lastDay = new Date().toDateString();
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && new Date().toDateString() !== lastDay) { lastDay = new Date().toDateString(); render(); }
+  if (document.visibilityState === 'visible' && new Date().toDateString() !== lastDay) { lastDay = new Date().toDateString(); ui.flareMore = false; render(); }
 });
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render());
