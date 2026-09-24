@@ -8,6 +8,8 @@ import {
 } from './content.js';
 import { careRecord } from './record.js';
 import { ember } from './mascot.js';
+import { anonymisedResult } from './insight.js';
+import { LocalCommunity, cardSummary, NOTE_LIMIT } from './community.js';
 import { headline, rerunSuggestion, describeThreat, clinicianSummary } from './reporting.js';
 import { COMMON_SYMPTOMS, dayKey, keyToDate, beforeAfter, BEFORE_AFTER_MINIMUM_DAYS } from './tracking.js';
 import { reminderCalendar, parseTime } from './reminders.js';
@@ -859,7 +861,12 @@ function moreTab() {
     h('div.stack.tight', {},
       h('p.label', {}, 'Yours'),
       row('Care record for appointments', 'record', 'Everything tried and ruled out, on one page'),
-      row('Journal', 'journal', store.journal.length ? plural(store.journal.length, 'entry', 'entries') : 'Private, and never part of a trial')),
+      row('Journal', 'journal', store.journal.length ? plural(store.journal.length, 'entry', 'entries') : 'Private, and never part of a trial'),
+      labsOn() && row('Community (preview)', 'community', 'Shared results — only on this device for now')),
+    card('', h('p.label', {}, 'Labs'),
+      h('p.body', {}, 'The community is designed but has no server yet. Turn on the preview to try it: everything stays on this device and no one else can see it.'),
+      h(`button.btn.outline${labsOn() ? '.on' : ''}`, { 'aria-pressed': String(labsOn()), onclick: () => { setLabs(!labsOn()); render(); } },
+        labsOn() ? 'Community preview is on' : 'Turn on the community preview')),
     card('', h('p.label', {}, 'Your data'),
       h('p.body', {}, 'Everything is stored in this browser on this device, and nowhere else. Back up regularly: if the phone is reset or lost, a backup is how you get your history back. It’s the same file the iPhone app reads, so it also moves you between the two.'),
       !standalone && h('p.caption', {}, 'Tip: in Safari, Share → Add to Home Screen. An installed web app keeps its data more reliably than a browser tab.'),
@@ -1026,6 +1033,95 @@ function recordSheet() {
   ];
 }
 
+// ── community (preview) ──────────────────────────────────────────────────────────
+
+const LABS_KEY = 'litmus.labs.community';
+function labsOn() { try { return localStorage.getItem(LABS_KEY) === 'on'; } catch { return false; } }
+function setLabs(on) { try { on ? localStorage.setItem(LABS_KEY, 'on') : localStorage.removeItem(LABS_KEY); } catch {} }
+
+let community = null;
+const communityStore = () => (community ??= new LocalCommunity());
+
+function resultCard(result) {
+  const c = cardSummary(result);
+  return h('div.stack.tight', { style: { gap: '4px' } },
+    h('p.label.sage', {}, c.title),
+    h('div', { style: { fontSize: '18px', fontFamily: 'var(--serif)' } }, c.verdict),
+    c.range && h('p.caption', {}, c.range),
+    h('p.caption', {}, c.detail));
+}
+
+function communitySheet(sh) {
+  const cm = communityStore();
+  const view = sh.view ?? 'feed';
+  const go = (v, extra = {}) => { ui.sheet = { kind: 'community', view: v, ...extra }; render(); };
+  const tabs = h('div.chips', {}, [['feed', 'Shared results'], ['share', 'Share yours'], ['mod', 'Moderator view']]
+    .map(([id, label]) => h(`button.chip${view === id ? '.on' : ''}`, { onclick: () => go(id) }, label)));
+  const banner = card('clay', h('p.body', {}, 'Preview. Everything here stays on this device — no one else can see it yet. It shows how sharing will work once there’s a server and a moderator.'));
+  const after = (res, okText) => {
+    if (!res.ok) { toast(res.problem); return false; }
+    if (res.held) { ui.sheet = { kind: 'support' }; render(); return false; }
+    toast(res.soundsLikeAdvice ? `${okText} A reminder: this space is for what happened to you, not advice for others.` : okText);
+    return true;
+  };
+
+  let body;
+  if (view === 'share') {
+    const done = store.completed.slice().reverse();
+    const chosen = done.find((r) => r.id === sh.pick) ?? done[0];
+    let note = '';
+    const count = h('p.caption', {}, `0/${NOTE_LIMIT}`);
+    const area = h('textarea.field', { placeholder: 'Anything that would help someone understand what you did (optional)', rows: 3, maxlength: NOTE_LIMIT,
+      oninput: (e) => { note = e.target.value; count.textContent = `${note.length}/${NOTE_LIMIT}`; } });
+    const result = chosen && anonymisedResult(chosen, store.analysis(chosen), store.profile);
+    body = done.length === 0
+      ? [h('p.body', {}, 'Sharing starts from a finished trial, so there’s something real to show. Once one is finished, it can be shared here.')]
+      : [
+          done.length > 1 && h('div.chips', {}, done.map((r) => h(`button.chip${r === chosen ? '.on' : ''}`, { onclick: () => go('share', { pick: r.id }) }, r.trial.conditionB.displayName))),
+          card('', resultCard(result)),
+          h('p.caption', {}, `Shared as ${cm.handle}. Only what’s on the card is shared — no name, no dates, no notes from your log.`),
+          area, count,
+          h('button.btn.primary', { onclick: () => { if (after(cm.post(result, note), 'Shared.')) go('feed'); } }, 'Share this result'),
+        ];
+  } else if (view === 'mod') {
+    const q = cm.queue();
+    body = [
+      h('p.body', {}, 'What one moderator would see: anything held by the crisis check, and anything reported. Nothing held is ever shown to other people.'),
+      q.length === 0 ? h('p.caption', {}, 'Nothing waiting.') : q.map((item) => card('',
+        h('p.label', {}, item.reason === 'crisis' ? 'Held: crisis language' : `Reported ${plural((item.reply ?? item.post).reports.length, 'time')}`),
+        h('p.body', { style: { color: 'var(--ink)' } }, item.reply ? item.reply.text : (item.post.note || cardSummary(item.post.result).title)),
+        item.reason === 'crisis' && h('p.caption', {}, 'The writer was shown crisis resources when they posted. A real moderator would follow the safety policy here.'),
+        h('div.row', {},
+          h('button.btn.outline', { onclick: () => { cm.moderate(item.post.id, item.reply?.id ?? null, 'keep'); render(); } }, 'Keep'),
+          h('button.btn.outline', { onclick: () => { cm.moderate(item.post.id, item.reply?.id ?? null, 'remove'); render(); } }, 'Remove')))),
+    ];
+  } else {
+    const posts = cm.feed();
+    body = [
+      h('p.caption', {}, `You appear as ${cm.handle}. There are no profiles and no private messages.`),
+      posts.length === 0 && h('p.body', {}, 'Nothing shared yet. Results appear here once people share finished trials.'),
+      posts.map((p) => {
+        let draft = '';
+        const field = h('input.field', { placeholder: 'Reply with your own experience', maxlength: NOTE_LIMIT, oninput: (e) => { draft = e.target.value; } });
+        return card('',
+          resultCard(p.result),
+          p.note && h('p.body', { style: { color: 'var(--ink)' } }, p.note),
+          h('div.row.between', {}, h('p.caption', {}, `${p.handle} · ${new Date(p.at).toLocaleDateString()}`),
+            p.mine ? h('button.link', { onclick: () => { cm.deleteOwn(p.id); render(); } }, 'Delete')
+              : h('button.link', { onclick: () => { toast(cm.report(p.id) ? 'Reported. A moderator will look at it.' : 'Already reported.'); render(); } }, 'Report')),
+          p.replies.length > 0 && h('div.stack.tight', { style: { borderLeft: '2px solid var(--line)', paddingLeft: '12px' } },
+            p.replies.map((r) => h('div', {},
+              h('p.body', { style: { color: 'var(--ink)' } }, r.text),
+              h('p.caption', {}, r.status === 'held' ? `${r.handle} · waiting for a moderator` : r.handle)))),
+          h('div.row', {}, field, h('button.btn.outline', { style: { width: 'auto', padding: '0 18px' },
+            onclick: () => { if (after(cm.reply(p.id, draft), 'Replied.')) render(); } }, 'Reply')));
+      }),
+      h('p.caption', {}, 'This is a place for what happened to you, not advice. Links can’t be posted.'),
+    ];
+  }
+  return [banner, tabs, ...[body].flat()];
+}
+
 // ── sheets ───────────────────────────────────────────────────────────────────────
 
 function openSheet(kind, data = {}) { ui.sheet = { kind, ...data }; render(); }
@@ -1044,6 +1140,7 @@ function sheet() {
     case 'flarePlan': title = 'Flare plan'; body = flarePlanSheet(); break;
     case 'journal': title = 'Journal'; body = journalSheet(); break;
     case 'record': title = 'Care record'; body = recordSheet(); break;
+    case 'community': title = 'Community'; body = communitySheet(sh); break;
     case 'support': title = 'You don’t have to carry this alone';
       body = [h('p.reading', {}, 'What you wrote sounds really hard. If you’re thinking about harming yourself or ending your life, please talk to someone now — they’re there for exactly this, any time of day.'),
         ...crisisLinks(),

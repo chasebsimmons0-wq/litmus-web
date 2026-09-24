@@ -46,6 +46,7 @@ reminder lives in the calendar instead.
 | `safety.js` | the crisis-language check on free text |
 | `record.js` | the care record and its questions for the clinician |
 | `mascot.js` | Ember, drawn as inline SVG |
+| `community.js` | the community's rules and a local backend for the Labs preview |
 | `insight.js` | the anonymised result format (`litmus.result.v1`) for future pooled insight; unused so far |
 | `app.js` | the screens |
 | `sw.js` | offline shell, network first |
@@ -55,6 +56,8 @@ No build step and no dependencies.
 ## Not built yet
 
 Aggregate insight and peer connection need a server. See `docs/server-features.md`.
+The community can already be tried from More → Labs: it runs entirely on the device,
+with the same rules a server would enforce, and no one else can see it.
 
 ## Tests
 

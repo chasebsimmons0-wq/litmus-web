@@ -128,3 +128,24 @@ test('a second trial can compare two options', async () => {
   assert.match(await page.locator('main').innerText(), / or massage\?/);
   assert.deepEqual(errors, []);
 });
+
+test('community preview: share a finished trial, reply, and crisis replies are held', async () => {
+  const { page, errors } = await freshPage();
+  await page.getByRole('button', { name: 'Trial', exact: true }).click();
+  await page.getByRole('button', { name: /End this trial early|Close this trial/ }).click();
+  await page.getByRole('button', { name: /End it now|Close and keep the result/ }).click();
+  await page.getByRole('button', { name: 'More', exact: true }).click();
+  await page.getByRole('button', { name: 'Turn on the community preview' }).click();
+  await page.getByRole('button', { name: /Community \(preview\)/ }).click();
+  const sheet = page.getByRole('dialog', { name: 'Community' });
+  await sheet.getByRole('button', { name: 'Share yours' }).click();
+  await sheet.getByPlaceholder(/Anything that would help/).fill('Heat pad, 20 minutes each evening.');
+  await sheet.getByRole('button', { name: 'Share this result' }).click();
+  await sheet.getByText('Heat pad, 20 minutes each evening.').waitFor();
+  assert.doesNotMatch(await sheet.innerText(), /Sam/);
+
+  await sheet.getByPlaceholder('Reply with your own experience').fill('some days I want to die');
+  await sheet.getByRole('button', { name: 'Reply' }).click();
+  await page.getByRole('dialog', { name: /carry this alone/ }).waitFor();
+  assert.deepEqual(errors, []);
+});
