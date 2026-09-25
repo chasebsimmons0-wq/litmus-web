@@ -78,7 +78,7 @@ function avatar(person, cls = '') {
 function header(title, lead) {
   return h('div.stack.tight', {},
     h('div.row', {}, guide(), h('div.grow')),
-    h('h1.display', {}, resultTitle(a)),
+    h('h1.display', {}, title),
     lead && h('p.reading', {}, lead));
 }
 
@@ -651,7 +651,7 @@ function resultBlock(a, record) {
   return h('div.stack', {},
     h('div.row', {}, guide(a.verdict.kind === 'inconclusive' ? 'think' : 'main'),
       h('p.label.sage', {}, trialName(trial))),
-    h('h1.display', {}, title),
+    h('h1.display', {}, resultTitle(a)),
     h('p.reading', {}, headline(a)),
     ready && Number.isFinite(a.low) && card('',
       h('p.label', {}, 'The likely range of the real effect'),
