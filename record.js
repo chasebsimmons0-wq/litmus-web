@@ -5,12 +5,16 @@
 
 import { SITES, QUALITIES, FACTORS, RED_FLAGS, LIBRARY, NERVE_QUALITIES } from './content.js';
 import { plannedDays, isComparison } from './engine.js';
+import { keyToDate } from './tracking.js';
 
 const f = (x, p = 1) => (Number.isFinite(x) ? x.toFixed(p) : '—');
 const signed = (x) => (x > 0 ? '+' : x < 0 ? '−' : '') + f(Math.abs(x));
 // The reader's own date format, as everywhere else in the app.
 let locale;
-const dateText = (d) => new Date(d).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
+// Medication dates are plain day keys (YYYY-MM-DD), which `new Date` would read as
+// UTC midnight and so print as the day before anywhere west of it.
+const asDate = (d) => (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? keyToDate(d) : new Date(d));
+const dateText = (d) => asDate(d).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
 const labels = (pairs, ids) => ids.map((id) => pairs.find(([k]) => k === id)?.[1]).filter(Boolean);
 const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 const addDays = (iso, n) => { const d = new Date(iso); d.setDate(d.getDate() + n); return d; };
