@@ -7,7 +7,10 @@ const profile = {
   sites: ['lowerBack', 'hips'], qualities: ['aching', 'burning', 'shooting'], diagnosesGiven: [],
   alreadyTried: ['manual.massage'], factors: ['brokenSleep'], redFlags: [], yearsWithPain: 6,
 };
-const trial = makeTrial({ intervention: { id: 'thermal.heat', displayName: 'Heat' }, seed: 3, startDate: '2026-01-05T00:00:00Z' });
+// Local midnight, as the app itself starts a trial: a UTC-midnight literal renders as
+// the day before wherever the clock is behind UTC, so the dates below would only match
+// in that one time zone.
+const trial = makeTrial({ intervention: { id: 'thermal.heat', displayName: 'Heat' }, seed: 3, startDate: new Date(2026, 0, 5).toISOString() });
 const analysis = (verdict) => ({ verdict, effect: -0.2, low: -0.9, high: 0.5, outcome: { displayName: 'Average daily pain' } });
 const done = { record: { trial, finishedOn: '2026-04-20T00:00:00Z' }, analysis: analysis({ kind: 'null' }) };
 
