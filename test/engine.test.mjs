@@ -71,7 +71,7 @@ test('a comparison puts a second option in the A weeks, and the contrast is B ag
   const { isComparison, conditionFor } = await import('../engine.js');
   const tens = { id: 'electrotherapy.tens-conventional', displayName: 'TENS' };
   const cmp = makeTrial({ intervention, comparator: tens, seed: 11, startDate: '2026-01-01T00:00:00Z' });
-  assert.equal(cmp.design, 'alternatingTreatments');
+  assert.equal(cmp.design, 'alternatingTreatment');
   assert.equal(isComparison(cmp), true);
   assert.equal(isComparison(trial), false);
   assert.equal(conditionFor(cmp, 'a'), tens);

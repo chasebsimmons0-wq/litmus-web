@@ -58,3 +58,11 @@ test('the record carries what was tried and ruled out, from the person and from 
   assert.match(text, /RULED OUT BY CLINICIANS, AS REPORTED\n- A disc problem, on MRI/);
   assert.match(text, /RULED OUT BY TESTING HERE\n- Heat: no effect of a meaningful size on average daily pain\./);
 });
+
+test('an acronym keeps its capitals mid-sentence', () => {
+  const tens = makeTrial({ intervention: { id: 'thermal.heat', displayName: 'Heat' }, comparator: { id: 'electro.tens', displayName: 'TENS' }, seed: 3, startDate: new Date(2026, 0, 5).toISOString() });
+  const text = careRecord({ name: 'Sam', profile, trials: [{ record: { trial: tens, finishedOn: '2026-04-20T00:00:00Z' }, analysis: analysis({ kind: 'null' }) }], dateLocale: 'en-GB' });
+  assert.doesNotMatch(text, /tENS/);
+  assert.match(text, /compared with TENS/);
+  assert.match(careRecord({ name: 'Sam', profile, trials: [done], dateLocale: 'en-GB' }), /Heat/);
+});

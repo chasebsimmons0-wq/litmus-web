@@ -60,3 +60,49 @@ test('averaged days keep their reading count through a backup', () => {
   assert.equal(row.sampleCount, 3);
   assert.equal(row.sampleSum, 12);
 });
+
+test('a trial archived after its last day is not marked ended early; one archived before it is', async () => {
+  for (const [daysIn, early] of [[200, false], [3, true]]) {
+    const store = new Store();
+    store.save = async () => {};
+    const trial = { id: 'T', startDate: daysAgo(daysIn), phases: [{ kind: 'b', startDay: 0, length: 10 }] };
+    store.person = { trials: [{ id: 'T', trial, entries: [], finishedOn: null }] };
+    await store.archiveCurrent();
+    assert.equal(store.person.trials[0].endedEarly, early, `archived ${daysIn} days in`);
+    assert.ok(store.person.trials[0].finishedOn);
+  }
+});
+
+test('a new trial warns about the running trials it would leave without an answer', async () => {
+  const { makeTrial } = await import('../engine.js');
+  const heat = { id: 'thermal.heat', displayName: 'Heat' };
+  const tens = { id: 'electrotherapy.tens-conventional', displayName: 'TENS' };
+  const running = (blockCount, i = 1) => {
+    const t = makeTrial({ intervention: i % 2 ? heat : tens, seed: i, blockCount, startDate: daysAgo(2) });
+    return { id: t.id, trial: t, entries: [], finishedOn: null };
+  };
+  const store = new Store();
+  const withTrials = (...records) => { store.person = { trials: records }; return store; };
+
+  assert.deepEqual(withTrials().trialsStarvedBy(false), [], 'nothing running, nothing to warn about');
+
+  // Already short of pairs on its own: the new trial is not what costs it the answer.
+  assert.deepEqual(withTrials(running(4)).trialsStarvedBy(false), []);
+
+  // Six blocks leave exactly two degrees of freedom; any overlap takes it below.
+  const six = running(6);
+  assert.deepEqual(withTrials(six).trialsStarvedBy(false), [six]);
+  assert.deepEqual(withTrials(six).trialsStarvedBy(true), [six]);
+
+  // Ten blocks can absorb a comparison (cost 2) and still reach an answer.
+  assert.deepEqual(withTrials(running(10)).trialsStarvedBy(true), []);
+
+  // Two eight-block trials overlapping each other are each one overlap from the edge.
+  const a = running(8, 1), b = running(8, 2);
+  assert.deepEqual(withTrials(a, b).trialsStarvedBy(false), [a, b]);
+
+  // A trial past its last day is not running today, so it cannot be starved.
+  const past = running(6);
+  past.trial.startDate = daysAgo(400);
+  assert.deepEqual(withTrials(past).trialsStarvedBy(false), []);
+});
