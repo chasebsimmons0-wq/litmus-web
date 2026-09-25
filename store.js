@@ -4,7 +4,7 @@
 // their trials; days indexed from a start date; several readings a day folded into a
 // mean. Nothing leaves the device except through an export the person makes.
 
-import { makeTrial, plannedDays, analyze, blockCountForOverlaps, conditionFor, phaseOnDay, PAIN_ID, TRIAL_DEFAULTS } from './engine.js';
+import { makeTrial, plannedDays, analyze, blockCountForOverlaps, pairedDegreesOfFreedom, isComparison, conditionFor, phaseOnDay, PAIN_ID, TRIAL_DEFAULTS } from './engine.js';
 import { dayKey } from './tracking.js';
 import { OUTCOME_RECORDS, USUAL_CARE } from './content.js';
 
@@ -204,11 +204,36 @@ export class Store {
   /** Active trials on one of their planned days today. */
   get overlapsForNewTrial() { return this.activeRecords.filter((r) => this.dayIn(r) != null).length; }
 
+  /** What those overlaps cost the new trial, in the engine's terms: one estimated
+   *  schedule per overlapping trial, two for a comparison (both of its options are
+   *  real treatments). For a comparison that is the most it can cost: the engine
+   *  spends one when A is redundant with B in the block pairs, but which applies isn't
+   *  known until the order is drawn, so sizing budgets for two. Sizing uses this;
+   *  wording uses the trial count above. */
+  get overlapCostForNewTrial() {
+    return this.activeRecords.filter((r) => this.dayIn(r) != null)
+      .reduce((n, r) => n + (isComparison(r.trial) ? 2 : 1), 0);
+  }
+
+  /** Active trials that starting a new one today would starve: each already
+   *  accounts for the other trials overlapping it, and one more (two for a
+   *  comparison) would leave it under 2 paired degrees of freedom. A trial that is
+   *  already starved isn't listed — the new trial isn't what costs it the answer. */
+  trialsStarvedBy(isComparisonTrial) {
+    const added = isComparisonTrial ? 2 : 1;
+    const today = this.activeRecords.filter((r) => this.dayIn(r) != null);
+    const cost = (r) => today.filter((o) => o !== r).reduce((n, o) => n + (isComparison(o.trial) ? 2 : 1), 0);
+    return today.filter((r) => {
+      const blocks = r.trial.phases.filter((p) => p.kind !== 'washout').length;
+      return pairedDegreesOfFreedom(blocks, cost(r)) >= 2 && pairedDegreesOfFreedom(blocks, cost(r) + added) < 2;
+    });
+  }
+
   async startTrial({ intervention, comparator = null, outcomeId, note, blockDays = TRIAL_DEFAULTS.blockDays, washoutDays = TRIAL_DEFAULTS.washoutDays }) {
     // Kept below 2^53 so the seed survives a round trip through JSON exactly.
     const seed = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
     const trial = makeTrial({
-      intervention, comparator, outcomeId, blockCount: blockCountForOverlaps(this.overlapsForNewTrial), blockDays, washoutDays, seed,
+      intervention, comparator, outcomeId, blockCount: blockCountForOverlaps(this.overlapCostForNewTrial), blockDays, washoutDays, seed,
       startDate: isoDate(startOfDay()), note,
     });
     if (!comparator) trial.conditionA = USUAL_CARE;
@@ -222,9 +247,11 @@ export class Store {
   async archiveCurrent() {
     const r = this.running;
     if (!r) return;
-    r.finishedOn = isoDate(new Date());
     // Kept so a trial stopped early is never mistaken for one that ran its course.
+    // Read before finishedOn is set: that takes the trial out of activeRecords, so
+    // focusedIsFinished would no longer see it and every trial would read as ended early.
     r.endedEarly = !this.focusedIsFinished;
+    r.finishedOn = isoDate(new Date());
     this.focusedId = null;
     await this.save();
   }
@@ -588,20 +615,24 @@ export class Store {
       adhered: e.adhered ?? null, isFlare: !!e.isFlare, note: e.note ?? null,
       ...(e.sampleCount > 1 && Number.isFinite(e.sampleSum) ? { sampleCount: e.sampleCount, sampleSum: e.sampleSum } : {}),
     });
+    // One trial that can't be read is left out rather than sinking the whole restore:
+    // the baseline, symptoms and medications are worth more than any single trial.
+    // The native app does the same and the two report it in the same words.
     const trials = [];
-    for (const c of data.completedTrials ?? []) {
-      const trial = fromNativeTrial(c.trial);
-      trials.push({ id: trial.id, trial, entries: c.entries.map(readEntry), finishedOn: c.finishedOn, endedEarly: c.endedEarly ?? null });
-    }
+    let skipped = 0;
+    const take = (raw, entries, extra) => {
+      try {
+        const trial = fromNativeTrial(raw);
+        trials.push({ id: trial.id, trial, entries: (entries ?? []).map(readEntry), ...extra });
+      } catch { skipped++; }
+    };
+    for (const c of data.completedTrials ?? []) take(c.trial, c.entries, { finishedOn: c.finishedOn, endedEarly: c.endedEarly ?? null });
     if (Array.isArray(data.activeTrials)) {
-      for (const a of data.activeTrials) {
-        const trial = fromNativeTrial(a.trial);
-        trials.push({ id: trial.id, trial, entries: a.entries.map(readEntry), finishedOn: null });
-      }
+      for (const a of data.activeTrials) take(a.trial, a.entries, { finishedOn: null });
     } else if (data.currentTrial) {
-      const trial = fromNativeTrial(data.currentTrial);
-      trials.push({ id: trial.id, trial, entries: (data.currentEntries ?? []).map(readEntry), finishedOn: null });
+      take(data.currentTrial, data.currentEntries, { finishedOn: null });
     }
+    this.restoreSkippedTrials = skipped;
     const baseline = (data.baseline ?? []).map(readEntry);
     const symptomScores = {};
     for (const x of data.symptomScores ?? []) (symptomScores[x.date] ??= {})[x.symptomId.toUpperCase()] = x.score;
@@ -633,6 +664,8 @@ export class Store {
 
 /// People saved before a field existed get it filled in, so every screen can assume it.
 function upgrade(p) {
+  // Comparison trials were first stored with the web-only plural spelling.
+  for (const r of p.trials ?? []) if (r.trial?.design === 'alternatingTreatments') r.trial.design = 'alternatingTreatment';
   p.symptoms ??= [];
   p.symptomScores ??= {};
   p.medications ??= [];
@@ -673,7 +706,7 @@ export function fromNativeTrial(n) {
   }
   return {
     id: n.id,
-    design: n.design,
+    design: n.design === 'alternatingTreatments' ? 'alternatingTreatment' : n.design,
     conditionA: n.conditionA,
     conditionB: n.conditionB,
     outcomeId: n.outcome.id,

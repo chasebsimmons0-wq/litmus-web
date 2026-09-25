@@ -1,7 +1,16 @@
 // Plain-language and clinician text. A port of PainCore/Reporting.swift; the wording
 // is the same so the two apps never describe one result differently.
 
-import { detectableEffect, PAIN_ID, TRIAL_DEFAULTS, trialLength } from './engine.js';
+import { detectableEffect, PAIN_ID, TRIAL_DEFAULTS, trialLength, isComparison } from './engine.js';
+
+/** A display name as it reads mid-sentence: first letter lowercased, unless the name
+ *  leads with an acronym ("TENS" must not become "tENS" or "tens"). The same rule as
+ *  PlainLanguage.midSentence on the Swift side. */
+export const midSentence = (s) => {
+  const head = s.match(/^\p{L}*/u)[0];
+  if (head.length >= 2 && head === head.toUpperCase() && head !== head.toLowerCase()) return s;
+  return s.charAt(0).toLowerCase() + s.slice(1);
+};
 
 const f = (x, places = 1) => (Number.isFinite(x) ? x.toFixed(places) : '—');
 const pct = (x) => (Number.isFinite(x) ? `${Math.round(x * 100)}%` : '—');
@@ -42,6 +51,27 @@ function comparisonHeadline(a) {
   return "This comparison can't answer the question yet. " + explain(a);
 }
 
+/** The result screen's headline, a few words. Worded identically to
+ *  PlainLanguage.title; the parity fixtures hold the two to it. */
+export function title(a) {
+  const v = a.verdict;
+  // "Too early" only where the trial has not yet done its job.
+  const unsettled = () => (v.reason === 'insufficientData' || v.reason === 'tooFewCompletedBlocks'
+    ? 'Too early to say.' : 'Not settled.');
+  if ((v.kind === 'meaningful' || v.kind === 'probable') && v.direction === 'noMeaningfulChange') return 'Too close to call.';
+  if (isComparison(a.trial)) {
+    const ahead = v.direction === 'improved' ? a.trial.conditionB.displayName : a.trial.conditionA.displayName;
+    if (v.kind === 'meaningful') return `${ahead} came out ahead.`;
+    if (v.kind === 'probable') return `${ahead} edged ahead.`;
+    if (v.kind === 'null') return 'No meaningful difference.';
+    return unsettled();
+  }
+  if (v.kind === 'meaningful') return v.direction === 'improved' ? 'This one looks like it\u2019s working.' : 'This one looks like it\u2019s making things worse.';
+  if (v.kind === 'probable') return v.direction === 'improved' ? 'Something changed for the better.' : 'Something changed for the worse.';
+  if (v.kind === 'null') return 'This one isn\u2019t doing much for you.';
+  return unsettled();
+}
+
 // The interval's two ends as sizes, smaller first, whichever way the effect points.
 function bounds(a) {
   const [x, y] = [Math.abs(a.low), Math.abs(a.high)];
@@ -69,7 +99,7 @@ function otherOutcomeHeadline(a) {
 }
 
 export function headline(a) {
-  if (a.trial.design === 'alternatingTreatments') return comparisonHeadline(a);
+  if (isComparison(a.trial)) return comparisonHeadline(a);
   if (a.outcome.id && a.outcome.id !== PAIN_ID) return otherOutcomeHeadline(a);
   const magnitude = f(Math.abs(a.effect));
   const low = f(Math.abs(a.high));
@@ -160,7 +190,7 @@ export function describeThreat(t) {
 
 // What the interval excludes, stated against the minimal important difference.
 function ruledOut(a) {
-  if (!Number.isFinite(a.low) || !Number.isFinite(a.high) || a.trial.design === 'alternatingTreatments') return [];
+  if (!Number.isFinite(a.low) || !Number.isFinite(a.high) || isComparison(a.trial)) return [];
   const mid = a.thresholds.important;
   const lower = a.outcome.lowerIsBetter;
   const out = [];
@@ -213,7 +243,7 @@ export function clinicianSummary(a, patientLabel, finishedOn = null) {
   if (patientLabel) out.push(`Patient: ${patientLabel}`);
   out.push(`Prepared ${dateText(new Date())}`, '');
 
-  const comparison = trial.design === 'alternatingTreatments';
+  const comparison = isComparison(trial);
   out.push('QUESTION', comparison
     ? `Do ${trial.conditionB.displayName} and ${trial.conditionA.displayName} differ in their effect on ${outcomeName}?`
     : `Does ${trial.conditionB.displayName} change ${outcomeName}?`);

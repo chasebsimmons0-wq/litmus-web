@@ -5,6 +5,7 @@
 
 import { SITES, QUALITIES, FACTORS, RED_FLAGS, LIBRARY, NERVE_QUALITIES } from './content.js';
 import { plannedDays, isComparison } from './engine.js';
+import { midSentence } from './reporting.js';
 import { keyToDate } from './tracking.js';
 
 const f = (x, p = 1) => (Number.isFinite(x) ? x.toFixed(p) : '—');
@@ -16,7 +17,7 @@ let locale;
 const asDate = (d) => (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? keyToDate(d) : new Date(d));
 const dateText = (d) => asDate(d).toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
 const labels = (pairs, ids) => ids.map((id) => pairs.find(([k]) => k === id)?.[1]).filter(Boolean);
-const lower = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+const lower = midSentence;
 const addDays = (iso, n) => { const d = new Date(iso); d.setDate(d.getDate() + n); return d; };
 
 const label = (t) => (isComparison(t) ? `${t.conditionB.displayName} compared with ${lower(t.conditionA.displayName)}` : t.conditionB.displayName);

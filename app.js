@@ -10,7 +10,7 @@ import { careRecord, shortVerdict } from './record.js';
 import { ember } from './mascot.js';
 import { anonymisedResult } from './insight.js';
 import { LocalCommunity, cardSummary, NOTE_LIMIT } from './community.js';
-import { headline, rerunSuggestion, describeThreat, clinicianSummary, plan } from './reporting.js';
+import { headline, title as resultTitle, rerunSuggestion, describeThreat, clinicianSummary, plan, midSentence } from './reporting.js';
 import { COMMON_SYMPTOMS, dayKey, keyToDate, beforeAfter, BEFORE_AFTER_MINIMUM_DAYS } from './tracking.js';
 import { reminderCalendar, parseTime } from './reminders.js';
 import { mentionsCrisis, crisisLine } from './safety.js';
@@ -78,7 +78,7 @@ function avatar(person, cls = '') {
 function header(title, lead) {
   return h('div.stack.tight', {},
     h('div.row', {}, guide(), h('div.grow')),
-    h('h1.display', {}, title),
+    h('h1.display', {}, resultTitle(a)),
     lead && h('p.reading', {}, lead));
 }
 
@@ -203,7 +203,8 @@ function restoreButton() {
     try {
       const name = await store.importText(await f.text());
       ui.sheet = null;
-      toast(`Restored as “${name}”.`);
+      const n = store.restoreSkippedTrials ?? 0;
+      toast(`Restored as “${name}”.${n ? ` ${n === 1 ? 'One trial' : `${n} trials`} couldn’t be read and ${n === 1 ? 'was' : 'were'} left out; everything else came back.` : ''}`);
     } catch (err) { toast(err.message); }
     e.target.value = '';
   } });
@@ -334,7 +335,7 @@ function todayTab() {
       : doing ? `${weekly ? 'A week' : 'A block'} on ${doing.displayName}.` : `An off ${weekly ? 'week' : 'block'}.`;
     lead = kind === 'washout' ? (isComparison(record.trial) ? 'Neither one today. Carry on as you were.' : 'Carry on as you were.')
       : kind === 'b' ? (record.trial.userNote || 'Do the thing you’re testing, as planned.')
-      : doing ? `Do ${doing.displayName.toLowerCase()} this week, not ${record.trial.conditionB.displayName.toLowerCase()}.` : 'Nothing to do differently.';
+      : doing ? `Do ${midSentence(doing.displayName)} this week, not ${midSentence(record.trial.conditionB.displayName)}.` : 'Nothing to do differently.';
   } else {
     title = `${pools.length} trials running`;
   }
@@ -488,7 +489,7 @@ function trialTab() {
 
   return h('div.stack', {},
     trialSwitcher(),
-    header(isComparison(trial) ? `${trial.conditionB.displayName} or ${trial.conditionA.displayName.toLowerCase()}?` : trial.conditionB.displayName,
+    header(isComparison(trial) ? `${trial.conditionB.displayName} or ${midSentence(trial.conditionA.displayName)}?` : trial.conditionB.displayName,
       isComparison(trial) ? `Comparing their effect on ${OUTCOMES[trial.outcomeId].displayName.toLowerCase()}.` : `Testing its effect on ${OUTCOMES[trial.outcomeId].displayName.toLowerCase()}.`),
     card('', h('div.row.between', {},
         h('div', {}, h('div.number', {}, elapsed), h('p.caption', {}, `of ${plannedDays(trial)} days`)),
@@ -506,7 +507,7 @@ function trialTab() {
           outline: now ? '2px solid var(--ink)' : 'none', opacity: past || now ? 1 : 0.55,
         } }, isComparison(trial) ? (p.kind === 'b' ? 'B' : 'A') : p.kind === 'b' ? 'On' : 'Off');
       })),
-      isComparison(trial) && h('p.caption', {}, `B is ${trial.conditionB.displayName.toLowerCase()}, A is ${trial.conditionA.displayName.toLowerCase()}.`),
+      isComparison(trial) && h('p.caption', {}, `B is ${midSentence(trial.conditionB.displayName)}, A is ${midSentence(trial.conditionA.displayName)}.`),
       h('p.caption', {}, 'Randomised, so a good or bad stretch can’t line up with the thing being tested.')),
     a && a.verdict.reason !== 'insufficientData' && a.verdict.reason !== 'tooFewCompletedBlocks' && Number.isFinite(a.low) && card('sage',
       h('p.label.sage', {}, 'Precision so far'),
@@ -558,7 +559,8 @@ function setupSheet() {
   const menu = suggestedOrder(profile).filter((i) => !running.has(i.id));
   const hidden = LIBRARY.filter((i) => !menu.includes(i) && !running.has(i.id));
   const overlaps = store.overlapsForNewTrial;
-  const blocks = blockCountForOverlaps(overlaps);
+  const overlapCost = store.overlapCostForNewTrial;
+  const blocks = blockCountForOverlaps(overlapCost);
   const shape = { ...TRIAL_DEFAULTS, blockCount: blocks, blockDays: ui.setup?.blockDays ?? TRIAL_DEFAULTS.blockDays, washoutDays: ui.setup?.washoutDays ?? TRIAL_DEFAULTS.washoutDays };
   const total = trialLength(shape);
   const st = ui.setup ??= { pick: menu[0]?.id ?? 'custom', custom: '', outcomeId: PAIN_ID, note: '', against: 'usual' };
@@ -570,7 +572,7 @@ function setupSheet() {
   if (st.against === st.pick) st.against = 'usual';
   const comparator = st.against === 'usual' ? null : menu.find((i) => i.id === st.against) ?? null;
   const outcome = OUTCOMES[st.outcomeId];
-  const detect = detectableEffect(sd ?? 1.5, 0.5, blocks, shape.blockDays, outcome, overlaps);
+  const detect = detectableEffect(sd ?? 1.5, 0.5, blocks, shape.blockDays, outcome, overlapCost);
   // A block length sized to this person's own variability, when there's a baseline to size it from.
   const suggested = sd != null && outcome.important != null ? plan(sd, 0.5, outcome.important, outcome, shape.washoutDays) : null;
 
@@ -604,7 +606,7 @@ function setupSheet() {
     h('div.chips', {}, [['usual', 'Nothing different'], ...menu.filter((i) => i.id !== st.pick).map((i) => [i.id, i.displayName])]
       .map(([id, label]) => h(`button.chip${st.against === id ? '.on' : ''}`, { 'aria-pressed': String(st.against === id), onclick: () => { st.against = id; render(); } }, label))),
     h('p.caption', {}, comparator
-      ? `Weeks of ${chosen?.displayName.toLowerCase() ?? 'your choice'} alternate with weeks of ${comparator.displayName.toLowerCase()}, in a random order. The result says which did more for you, if either.`
+      ? `Weeks of ${(chosen ? midSentence(chosen.displayName) : 'your choice')} alternate with weeks of ${midSentence(comparator.displayName)}, in a random order. The result says which did more for you, if either.`
       : 'The usual test: weeks on, weeks off. Choose a second option instead to find out which of two things works better for you.'),
     h('p.label', {}, 'Measured by'),
     h('div.stack.tight', {}, Object.values(OUTCOMES).map((o) => h(`button.check${st.outcomeId === o.id ? '.on' : ''}`, { onclick: () => { st.outcomeId = o.id; render(); } },
@@ -613,6 +615,11 @@ function setupSheet() {
     overlaps > 0 && card('clay', h('p.label', { style: { color: 'var(--clay)' } }, 'Running alongside other trials'),
       h('p.body', {}, `${overlaps === 1 ? 'One trial is already running. Its' : `${overlaps} trials are already running. Their`} on and off weeks will be accounted for, but every trial running at once makes each answer less precise — this one and ${overlaps === 1 ? 'the one' : 'the ones'} already going. A real change becomes easier to miss, and if two things interact that can’t be untangled.`),
       blocks > 10 && h('p.caption', {}, `To make up for some of that, this trial alternates over ${blocks} weeks instead of the usual 10.`)),
+    // One card per trial this one would leave without enough weeks for an answer.
+    ...store.trialsStarvedBy(comparator != null).map((r) => {
+      const name = isComparison(r.trial) ? `${r.trial.conditionB.displayName} or ${r.trial.conditionA.displayName}` : r.trial.conditionB.displayName;
+      return card('clay', h('p.body', {}, `Running this alongside ${name} would leave ${name} too few weeks to reach an answer, because it would have to account for one more trial. Starting this once ${name} has finished avoids that.`));
+    }),
     h('p.label', {}, 'Length'),
     h('p.caption', {}, 'Days in each block'),
     h('div.chips', {}, [5, 7, 10, 14].map((d) => h(`button.chip${shape.blockDays === d ? '.on' : ''}`, { 'aria-pressed': String(shape.blockDays === d), onclick: () => { st.blockDays = d; render(); } }, `${d} days`))),
@@ -634,18 +641,6 @@ function resultBlock(a, record) {
   const trial = a.trial;
   const ready = !(a.verdict.kind === 'inconclusive' && ['insufficientData', 'tooFewCompletedBlocks'].includes(a.verdict.reason));
   const rerun = rerunSuggestion(a);
-  const ahead = a.verdict.direction === 'improved' ? trial.conditionB.displayName : trial.conditionA.displayName;
-  const title = isComparison(trial) ? {
-    meaningful: `${ahead} came out ahead.`,
-    probable: `${ahead} edged ahead.`,
-    null: 'No meaningful difference.',
-    inconclusive: ready ? 'Not settled.' : 'Too early to say.',
-  }[a.verdict.kind] : {
-    meaningful: a.verdict.direction === 'improved' ? 'This seems to help.' : 'This seems to make things worse.',
-    probable: 'Something changed.',
-    null: 'No meaningful effect.',
-    inconclusive: ready ? 'Not settled.' : 'Too early to say.',
-  }[a.verdict.kind];
   const span = 5;
   const pos = (v) => `${Math.max(0, Math.min(100, ((v + span) / (2 * span)) * 100))}%`;
   // Left of centre is a lower score. In a comparison, name who that favours.

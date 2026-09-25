@@ -28,7 +28,8 @@ export function anonymisedResult(record, analysis, profile) {
   return {
     schema: RESULT_SCHEMA,
     trial: {
-      design: t.design,
+      // One spelling in the pooled format whatever the trial was stored with.
+      design: isComparison(t) ? 'alternatingTreatment' : 'withdrawalABAB',
       intervention: option(t.conditionB),
       comparator: isComparison(t) ? option(t.conditionA) : null,
       outcome: t.outcomeId,

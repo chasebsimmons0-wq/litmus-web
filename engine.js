@@ -185,6 +185,42 @@ function crossProduct(design) {
   return xtx;
 }
 
+// Which candidate columns add information to a regression, in order: one is kept only
+// if a non-negligible part of it lies outside the span of `base` and of the columns
+// already kept (Gram-Schmidt residual, relative to the column's own size). A dropped
+// column is an exact combination of columns still in the model, so nothing is lost.
+// Mirrors Stats.independentColumns: same order, tolerance and arithmetic.
+export function independentColumns(candidates, base, tolerance = 1e-9) {
+  const basis = [], norms = [];
+  const squared = (v) => { let sum = 0; for (const x of v) sum += x * x; return sum; };
+  const residual = (v) => {
+    const r = v.slice();
+    for (let k = 0; k < basis.length; k++) {
+      const q = basis[k];
+      let dot = 0;
+      for (let i = 0; i < r.length; i++) dot += r[i] * q[i];
+      const c = dot / norms[k];
+      for (let i = 0; i < r.length; i++) r[i] = r[i] - c * q[i];
+    }
+    return r;
+  };
+  for (const column of base) {
+    const total = squared(column);
+    const r = residual(column);
+    const left = squared(r);
+    if (total > 0 && left > tolerance * total) { basis.push(r); norms.push(left); }
+  }
+  const kept = [];
+  candidates.forEach((column, j) => {
+    const total = squared(column);
+    if (!(total > 0)) return;
+    const r = residual(column);
+    const left = squared(r);
+    if (left > tolerance * total) { kept.push(j); basis.push(r); norms.push(left); }
+  });
+  return kept;
+}
+
 function invert(m) {
   const n = m.length;
   const inverse = Array.from({ length: n }, () => new Array(n).fill(0));
@@ -348,7 +384,7 @@ export function makeTrial({
     id: crypto.randomUUID(),
     // With a comparator, A is a second active option rather than usual care. The
     // analysis is the same contrast either way; only what A means changes.
-    design: comparator ? 'alternatingTreatments' : 'withdrawalABAB',
+    design: comparator ? 'alternatingTreatment' : 'withdrawalABAB',
     conditionA: comparator ?? { id: 'control.usual-care', displayName: 'Usual care (no added intervention)' },
     conditionB: intervention,
     outcomeId,
@@ -360,7 +396,10 @@ export function makeTrial({
 }
 
 /** A trial comparing two active options, rather than one option against usual care. */
-export const isComparison = (trial) => trial.design === 'alternatingTreatments';
+// 'alternatingTreatment' is the native spelling and what new trials write; older web
+// trials and backups say 'alternatingTreatments', so both are read.
+export const isComparison = (trial) =>
+  trial.design === 'alternatingTreatment' || trial.design === 'alternatingTreatments';
 
 /** What the person does in a block of this kind, or null for usual care and washouts. */
 export function conditionFor(trial, kind) {
@@ -385,13 +424,37 @@ function otherPhase(other, day) {
 
 export const isOnAt = (other, day) => (otherPhase(other, day)?.kind === 'b' ? 1 : 0);
 
+// A comparison trial's A is a treatment in its own right, not usual care, so its A
+// days get a column of their own rather than being scored as "off".
+export const isOnAAt = (other, day) =>
+  (isComparison(other.trial) && otherPhase(other, day)?.kind === 'a' ? 1 : 0);
+
+// One column per active condition (ConcurrentTrial.covariates in Model.swift). When
+// the other trial was in A or B on every analysed day the two columns sum to the
+// intercept, so B alone carries their difference.
+export function overlapCovariates(other, days) {
+  const onB = days.map((d) => isOnAt(other, d));
+  if (!isComparison(other.trial)) return [onB];
+  const onA = days.map((d) => isOnAAt(other, d));
+  const running = new Set(onA.map((a, i) => a + onB[i]));
+  return running.size > 1 ? [onB, onA] : [onB];
+}
+
 export function overlaps(other, base) {
   const n = plannedDays(base);
   for (let d = 0; d < n; d++) if (otherPhase(other, d)) return true;
   return false;
 }
 
+// overlapCount is the cost (1 per on/off trial, 2 per comparison), an upper bound: the
+// engine spends only on columns it keeps. Mirrors TrialPlanner.blockCount(forOverlaps:).
 export const blockCountForOverlaps = (overlapCount, standard = 10) => Math.max(standard, 2 * (overlapCount + 4));
+
+// Degrees of freedom left to the paired block comparison once overlapping trials have
+// taken theirs: one per pair, less one for the mean, less the overlap cost. Below two,
+// the trial is starved. Mirrors TrialPlanner.pairedDegreesOfFreedom.
+export const pairedDegreesOfFreedom = (blockCount, overlapCost) =>
+  Math.trunc(blockCount / 2) - 1 - overlapCost;
 
 export function phaseOnDay(trial, day) {
   return trial.phases.find((p) => day >= p.startDay && day < p.startDay + p.length) || null;
@@ -490,10 +553,12 @@ function pairedBlockEstimate(trial, byDay, otherSchedules = new Map(), otherCoun
   }
 
   const m = differences.length;
-  const informative = [];
-  for (let j = 0; j < otherCount; j++) {
-    if (otherDifferences.some((row) => Math.abs(row[j]) > 1e-9)) informative.push(j);
-  }
+  // Schedules that never differ within a pair, or whose differences are a combination
+  // of those already kept (a comparison's A and B are exact opposites in any pair its
+  // washouts miss), are dropped; degrees of freedom are spent only on what is kept.
+  const columns = [];
+  for (let j = 0; j < otherCount; j++) columns.push(otherDifferences.map((row) => row[j]));
+  const informative = independentColumns(columns, []);
   otherDifferences = otherDifferences.map((row) => informative.map((j) => row[j]));
   const df = m - 1 - informative.length;
   if (!(m >= 2 && df >= 1)) return null;
@@ -615,8 +680,8 @@ export function analyze(trial, entries, concurrent = []) {
   }
 
   const overlapping = concurrent.filter((o) => overlaps(o, trial));
-  const covariates = overlapping
-    .map((o) => days.map((d) => isOnAt(o, d)))
+  const candidateCovariates = overlapping
+    .flatMap((o) => overlapCovariates(o, days))
     .filter((col) => new Set(col).size > 1);
 
   const a = summarize('a', trial, byDay);
@@ -628,8 +693,16 @@ export function analyze(trial, entries, concurrent = []) {
 
   const hasEnoughData = a.loggedDays >= MINIMUM_DAYS_PER_CONDITION && b.loggedDays >= MINIMUM_DAYS_PER_CONDITION;
   const meanDay = mean(days);
+  // Overlap columns that are exact combinations of the intercept, the trend and those
+  // already kept are dropped (Analysis.swift explains; isB is deliberately not in the base).
+  const trendColumn = days.map((day) => (day - meanDay) / 7);
+  const covariates = independentColumns(candidateCovariates, [days.map(() => 1), trendColumn])
+    .map((j) => candidateCovariates[j]);
   const design = days.map((day, i) => [1, isB[i], (day - meanDay) / 7, ...covariates.map((col) => col[i])]);
-  const entangled = covariates.some((col) => Math.abs(correlation(col, isB)) > 0.8);
+  // Checked over every candidate, not only the columns kept: a dropped column is a
+  // combination of the kept ones, so it can track this trial's schedule while each kept
+  // column stays under the threshold, and checking all keeps the answer order-independent.
+  const entangled = candidateCovariates.some((col) => Math.abs(correlation(col, isB)) > 0.8);
   const solved = entangled ? null : ols(design, scores);
   const beta = hasEnoughData ? solved : null;
 

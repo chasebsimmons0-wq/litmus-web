@@ -61,6 +61,11 @@ with the same rules a server would enforce, and no one else can see it.
 
 ## Tests
 
+This folder is the source of truth for the web app and is mirrored to the public
+`litmus-web` repo, which is what cloud sessions clone. Two test files live only here,
+because they need fixtures the Swift engine generates: `test/parity.mjs` (the JS engine
+must agree with the Swift one) and `test/export-round-trip.mjs`.
+
 ```bash
 npm install
 npm test                  # engine, reminders, crisis check, store — no browser needed
@@ -91,10 +96,10 @@ Home Screen.
 ## Data
 
 Backups use the same `litmus.export.v3` file as the iPhone app. The journal, flare plan
-and appointment questions are extra keys (`journal`, `flarePlan`,
-`appointmentQuestions`) that only the web app reads so far. A comparison trial is written
-with `design: "alternatingTreatments"`; the native app needs that design case before it
-can restore one.
+and appointment questions travel as extra keys (`journal`, `flarePlan`,
+`appointmentQuestions`), which both apps read and write. A comparison trial is written
+with `design: "alternatingTreatment"`, the spelling the native app uses; older web
+backups wrote "alternatingTreatments", and both apps still read either.
 
 Data lives in IndexedDB for the site's origin, on that device only. An app installed to
 the home screen keeps its data more reliably than a Safari tab, but browsers can still
